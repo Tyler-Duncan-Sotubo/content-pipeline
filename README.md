@@ -44,3 +44,4 @@ curl -X POST http://localhost:3000/pipeline/run -H 'Content-Type: application/js
   Delete it to reprocess everything. Swap `StateService` for a DB later if needed.
 - Articles are original AI-written reviews based on the song title/description — the
   prompt forbids copying source text. Still review drafts before publishing.
+# content-pipeline
