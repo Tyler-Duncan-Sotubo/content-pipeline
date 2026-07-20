@@ -15,8 +15,7 @@ export class PipelineCronService {
 
   // Tanzania (djmwanga.com) - 4x/day at 9am, 1pm, 5pm, 9pm WAT (Nigeria time),
   // timed around djmwanga's own posting bursts and Nigerian audience active hours.
-  // Commented out for now while backfilling gospel - re-enable when done.
-  // @Cron("0 9,13,17,21 * * *", { name: "pipeline-tz", timeZone: "Africa/Lagos" })
+  @Cron("0 9,13,17,21 * * *", { name: "pipeline-tz", timeZone: "Africa/Lagos" })
   async runTanzania(): Promise<void> {
     this.logger.log("Cron: starting Tanzania run");
     try {
@@ -27,10 +26,12 @@ export class PipelineCronService {
     }
   }
 
-  // Gospel (ceenaija.com) - every 10 minutes for backfill. Once the backlog is
-  // cleared, switch to 3x/day: "0 12,16,20 * * *" (noon, 4pm, 8pm WAT) - right
-  // after ceenaija's morning posting burst, plus afternoon/evening catch-up.
-  @Cron("*/10 * * * *", { name: "pipeline-gospel", timeZone: "Africa/Lagos" })
+  // Gospel (ceenaija.com) - 3x/day at 12pm, 4pm, 8pm WAT - right after
+  // ceenaija's morning posting burst, plus afternoon/evening catch-up.
+  @Cron("0 12,16,20 * * *", {
+    name: "pipeline-gospel",
+    timeZone: "Africa/Lagos",
+  })
   async runGospel(): Promise<void> {
     this.logger.log("Cron: starting gospel run");
     try {
