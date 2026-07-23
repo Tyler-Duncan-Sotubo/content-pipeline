@@ -95,6 +95,50 @@ export class WordpressService {
   }
 
   /**
+   * Checks tooxclusive itself for an existing post matching this artist + song
+   * title. This is independent of state.json - a second line of defense against
+   * duplicates when local and production state files have drifted out of sync
+   * (state.json is per-machine and gitignored, so it can't be trusted alone).
+   * Matches only if the found post's title contains both the artist name and
+   * song title (loosely normalized) to avoid false positives on generic words.
+   */
+  async findExistingPost(
+    artist: string,
+    songTitle: string,
+    credentials?: WpCredentials,
+  ): Promise<{ id: number; link: string } | undefined> {
+    const normalize = (s: string) =>
+      s
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+
+    const primaryArtist = artist.split(/\s*(?:ft\.?|feat\.?|featuring|&|,|\bx\b)\s*/i)[0].trim();
+    const query = `${primaryArtist} ${songTitle}`;
+
+    try {
+      const found = await this.request<{ id: number; link: string; title: { rendered: string } }[]>(
+        `/posts?search=${encodeURIComponent(query)}&per_page=5`,
+        {},
+        credentials,
+      );
+
+      const artistNorm = normalize(primaryArtist);
+      const titleNorm = normalize(songTitle);
+      const match = found.find((p) => {
+        const postTitle = normalize(p.title.rendered);
+        return postTitle.includes(artistNorm) && postTitle.includes(titleNorm);
+      });
+
+      return match ? { id: match.id, link: match.link } : undefined;
+    } catch (err) {
+      this.logger.warn(`Duplicate check failed for "${query}": ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /**
    * Resolve the country's category (e.g. "Tanzania") to its ID. This is a fixed,
    * curated taxonomy on tooxclusive - matched only, never created, so a typo
    * or missing category doesn't spam new categories onto the site.

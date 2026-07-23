@@ -17,7 +17,7 @@ export interface RunSummary {
   fresh: number;
   results: {
     sourceTitle: string;
-    status: "published" | "failed";
+    status: "published" | "failed" | "duplicate";
     wpLink?: string;
     error?: string;
   }[];
@@ -145,6 +145,25 @@ export class PipelineService {
       this.logger.log(`Generating article for: ${post.title}`);
       try {
         const article = await this.generator.generateArticle(post);
+
+        const existing = await this.wordpress.findExistingPost(
+          article.artist,
+          article.songTitle,
+          target.wpCredentials,
+        );
+        if (existing) {
+          this.logger.warn(
+            `Skipping "${article.title}" - already exists on WordPress: ${existing.link}`
+          );
+          this.state.markProcessed(post.id, existing.id);
+          summary.results.push({
+            sourceTitle: post.title,
+            status: "duplicate",
+            wpLink: existing.link,
+          });
+          continue;
+        }
+
         const isVideo = /\bvideo\b/i.test(post.title);
 
         if (isVideo && !/\bvideo\b/i.test(article.title)) {
