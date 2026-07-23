@@ -28,4 +28,13 @@ export class PipelineController {
   runGospel(@Body() body: { artists?: string[]; limit?: number }): Promise<RunSummary> {
     return this.pipeline.runGospel(body?.artists, body?.limit);
   }
+
+  /**
+   * Trigger a Ghana run (ghanasong.org), independent of the country pipeline.
+   * POST /pipeline/run-ghana  { "artists": ["Sarkodie"], "limit": 2 }
+   */
+  @Post("run-ghana")
+  runGhana(@Body() body: { artists?: string[]; limit?: number }): Promise<RunSummary> {
+    return this.pipeline.runGhana(body?.artists, body?.limit);
+  }
 }

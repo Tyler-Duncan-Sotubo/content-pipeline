@@ -41,4 +41,20 @@ export class PipelineCronService {
       this.logger.error(`Cron: gospel run failed: ${(err as Error).message}`);
     }
   }
+
+  // Ghana (ghanasong.org) - 3x/day at 10am, 2pm, 7pm WAT, offset from the
+  // gospel run so they don't compete for API rate limits at the same minute.
+  @Cron("0 10,14,19 * * *", {
+    name: "pipeline-ghana",
+    timeZone: "Africa/Lagos",
+  })
+  async runGhana(): Promise<void> {
+    this.logger.log("Cron: starting Ghana run");
+    try {
+      const summary = await this.pipeline.runGhana();
+      this.logger.log(`Cron: Ghana run done - ${JSON.stringify(summary)}`);
+    } catch (err) {
+      this.logger.error(`Cron: Ghana run failed: ${(err as Error).message}`);
+    }
+  }
 }

@@ -8,6 +8,7 @@
     "start:dev": "nest start --watch",
     "pipeline": "ts-node src/cli.ts",
     "pipeline:gospel": "ts-node src/cli-gospel.ts",
+    "pipeline:ghana": "ts-node src/cli-ghana.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

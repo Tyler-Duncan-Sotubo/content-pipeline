@@ -46,3 +46,14 @@ export const GOSPEL_SOURCE: GospelSourceConfig = {
   wpCategory: "Gospel",
   downloadLinkStyle: "any-mp3-link",
 };
+
+/**
+ * Ghana source, run as its own independent pipeline/cron (like GOSPEL_SOURCE)
+ * rather than through the single COUNTRY switch, so it can run alongside TZ.
+ */
+export const GHANA_SOURCE: GospelSourceConfig = {
+  name: "GhanaSong",
+  sourceUrl: "https://ghanasong.org",
+  wpCategory: "GHANA",
+  downloadLinkStyle: "download-attr",
+};

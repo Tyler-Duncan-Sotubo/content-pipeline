@@ -19,6 +19,10 @@ export const envSchema = z
     WP_USER_GOSPEL: z.string().optional(),
     WP_APP_PASSWORD_GOSPEL: z.string().optional(),
 
+    // Optional separate publisher account for the Ghana pipeline. Same fallback rule.
+    WP_USER_GHANA: z.string().optional(),
+    WP_APP_PASSWORD_GHANA: z.string().optional(),
+
     SPOTIFY_CLIENT_ID: z.string().optional(),
     SPOTIFY_CLIENT_SECRET: z.string().optional(),
     // Which country's source site to pull from - see src/countries.ts
