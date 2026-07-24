@@ -159,12 +159,17 @@ export class WordpressService {
     }
   }
 
-  /** Downloads an image and uploads it to the WP media library. Returns the media ID, or undefined on failure. */
+  /**
+   * Downloads an image from the source site and uploads it to our own WP media
+   * library. Returns both the media ID (for featured_media) and the resulting
+   * URL on OUR domain, so the body content can reference our own copy instead
+   * of hotlinking the source site's image.
+   */
   private async uploadFeaturedImage(
     imageUrl: string,
     filenameHint: string,
     credentials?: WpCredentials,
-  ): Promise<number | undefined> {
+  ): Promise<{ id: number; url: string } | undefined> {
     try {
       const imgRes = await fetch(imageUrl, { headers: { "User-Agent": "Mozilla/5.0 (content-pipeline)" } });
       if (!imgRes.ok) throw new Error(`Image fetch failed (${imgRes.status})`);
@@ -184,8 +189,8 @@ export class WordpressService {
         body: buffer,
       });
       if (!res.ok) throw new Error(`Media upload failed (${res.status}): ${await res.text()}`);
-      const media = (await res.json()) as { id: number };
-      return media.id;
+      const media = (await res.json()) as { id: number; source_url: string };
+      return { id: media.id, url: media.source_url };
     } catch (err) {
       this.logger.warn(`Skipping featured image: ${(err as Error).message}`);
       return undefined;
@@ -200,9 +205,15 @@ export class WordpressService {
   ): Promise<PublishResult> {
     const tagIds = await this.resolveTags(article.tags, credentials);
     const categoryId = categoryName ? await this.resolveCategory(categoryName, credentials) : undefined;
-    const featuredMediaId = imageUrl
+    const uploadedImage = imageUrl
       ? await this.uploadFeaturedImage(imageUrl, article.title, credentials)
       : undefined;
+
+    // Use our own uploaded copy of the image in the body, not the source
+    // site's URL - avoids hotlinking and a second, duplicate <img> tag.
+    const bodyWithOurImage = uploadedImage
+      ? article.bodyHtml.replace(imageUrl!, uploadedImage.url)
+      : article.bodyHtml;
 
     const post = await this.request<{ id: number; link: string; status: string }>(
       "/posts",
@@ -211,11 +222,11 @@ export class WordpressService {
         body: JSON.stringify({
           title: article.title,
           excerpt: article.excerpt,
-          content: article.bodyHtml,
+          content: bodyWithOurImage,
           tags: tagIds,
           ...(categoryId ? { categories: [categoryId] } : {}),
           status: this.postStatus,
-          ...(featuredMediaId ? { featured_media: featuredMediaId } : {}),
+          ...(uploadedImage ? { featured_media: uploadedImage.id } : {}),
         }),
       },
       credentials,
