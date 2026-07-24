@@ -94,17 +94,6 @@ export class WordpressService {
     return this.resolveTerms("/tags", this.splitArtistTags(rawNames), credentials);
   }
 
-  /** Resolves tag IDs to their names, for diffing "which collaborators are already tagged". */
-  async getTagNames(tagIds: number[], credentials?: WpCredentials): Promise<string[]> {
-    if (tagIds.length === 0) return [];
-    const found = await this.request<{ id: number; name: string }[]>(
-      `/tags?include=${tagIds.join(",")}&per_page=${tagIds.length}`,
-      {},
-      credentials,
-    );
-    return found.map((t) => t.name);
-  }
-
   /**
    * Checks tooxclusive itself for an existing post matching this artist + song
    * title. This is independent of state.json - a second line of defense against
@@ -201,57 +190,6 @@ export class WordpressService {
       this.logger.warn(`Skipping featured image: ${(err as Error).message}`);
       return undefined;
     }
-  }
-
-  /** Fetches all posts by an artist (via tag or search), for auditing purposes. */
-  async findPostsByArtist(
-    artist: string,
-    perPage = 20,
-    credentials?: WpCredentials,
-  ): Promise<{ id: number; link: string; title: string }[]> {
-    const found = await this.request<{ id: number; link: string; title: { rendered: string } }[]>(
-      `/posts?search=${encodeURIComponent(artist)}&per_page=${perPage}&_fields=id,link,title`,
-      {},
-      credentials,
-    );
-    return found.map((p) => ({ id: p.id, link: p.link, title: p.title.rendered }));
-  }
-
-  /** Fetches one post's full content/excerpt/tags for auditing. */
-  async getPostForAudit(
-    id: number,
-    credentials?: WpCredentials,
-  ): Promise<{ id: number; link: string; title: string; contentHtml: string; excerpt: string; tags: number[] }> {
-    const post = await this.request<{
-      id: number;
-      link: string;
-      title: { rendered: string };
-      content: { rendered: string };
-      excerpt: { rendered: string };
-      tags: number[];
-    }>(`/posts/${id}?_fields=id,link,title,content,excerpt,tags`, {}, credentials);
-    return {
-      id: post.id,
-      link: post.link,
-      title: post.title.rendered,
-      contentHtml: post.content.rendered,
-      excerpt: post.excerpt.rendered,
-      tags: post.tags,
-    };
-  }
-
-  /** Applies an audit fix to an existing post: new content, excerpt, and/or tags. */
-  async updatePost(
-    id: number,
-    changes: { content?: string; excerpt?: string; tags?: number[] },
-    credentials?: WpCredentials,
-  ): Promise<{ id: number; link: string }> {
-    const post = await this.request<{ id: number; link: string }>(
-      `/posts/${id}`,
-      { method: "POST", body: JSON.stringify(changes) },
-      credentials,
-    );
-    return post;
   }
 
   async publishArticle(

@@ -32,10 +32,6 @@ export const envSchema = z
     LOOKBACK_DAYS: z.coerce.number().int().min(0).default(7),
     MAX_PER_RUN: z.coerce.number().int().min(1).default(3),
 
-    // Max posts to fix per audit run (see audit-artists.json) - each fix costs
-    // an LLM call and rewrites live content, so keep this modest.
-    AUDIT_MAX_PER_RUN: z.coerce.number().int().min(1).default(5),
-
     // Logging - Better Stack (Logtail) in production; pretty console in dev.
     // Leave LOGTAIL_* unset to log to console only.
     LOG_LEVEL: z.string().optional(),

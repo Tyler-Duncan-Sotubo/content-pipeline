@@ -9,7 +9,6 @@
     "pipeline": "ts-node src/cli.ts",
     "pipeline:gospel": "ts-node src/cli-gospel.ts",
     "pipeline:ghana": "ts-node src/cli-ghana.ts",
-    "audit": "ts-node src/cli-audit.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
