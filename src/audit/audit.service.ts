@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { WordpressService, WpCredentials } from "../publish/wordpress.service";
 import { AuditGeneratorService } from "./audit-generator.service";
 import { AuditStateService } from "./audit-state.service";
+import { LinksService } from "../links/links.service";
 
 // A floor for detecting genuinely thin/broken posts (under this, a post almost
 // certainly doesn't serve search intent at all) - not a target length. The
@@ -145,6 +146,7 @@ export class AuditService {
     private readonly wordpress: WordpressService,
     private readonly generator: AuditGeneratorService,
     private readonly state: AuditStateService,
+    private readonly links: LinksService,
   ) {
     this.maxPerRun = Number(config.get("AUDIT_MAX_PER_RUN") ?? 5);
   }
@@ -181,6 +183,9 @@ export class AuditService {
     }
     if (input.tags.length === 0) {
       issues.push("missing_tags");
+    }
+    if (!embeds.some((e) => /<iframe/i.test(e))) {
+      issues.push("missing_spotify");
     }
 
     return { issues, wordCount, cleanText: cleanContent, embeds };
@@ -261,6 +266,17 @@ export class AuditService {
           const fixesApplied: string[] = [];
           const changes: { content?: string; excerpt?: string; tags?: number[] } = {};
 
+          // Look up a Spotify embed once, reused whether or not a rewrite happens.
+          let spotifyEmbed: string | undefined;
+          if (issues.includes("missing_spotify")) {
+            const embedUrl = await this.links.findSpotifyEmbedUrl(artist, post.title);
+            if (embedUrl) {
+              spotifyEmbed = `<iframe style="border-radius:12px" width="100%" height="152" frameborder="0" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy" src="${embedUrl}?utm_source=oembed"></iframe>`;
+            } else {
+              this.logger.warn(`No Spotify match found for "${post.title}" - leaving without a player`);
+            }
+          }
+
           const needsRewrite =
             issues.includes("thin_content") ||
             issues.includes("stray_text_in_content") ||
@@ -296,6 +312,7 @@ export class AuditService {
             // player, additional images) goes after the rewritten text - same
             // placement the original content and the main pipeline both use.
             const [firstEmbed, ...restEmbeds] = embeds;
+            if (spotifyEmbed) restEmbeds.push(spotifyEmbed);
             // Link each collaborator's first name-mention to their /artists/
             // page (if on the roster) - the only available way to connect a
             // post to that page, since no taxonomy relationship exists.
@@ -309,6 +326,12 @@ export class AuditService {
               .join("\n");
             changes.excerpt = rewritten.excerpt;
             fixesApplied.push("content_rewrite", "excerpt", "artist_link");
+            if (spotifyEmbed) fixesApplied.push("spotify_embed");
+          } else if (spotifyEmbed) {
+            // No rewrite needed, but a Spotify embed was missing - append it
+            // to the existing content as-is, before the fallback footer text.
+            changes.content = `${full.contentHtml}\n<p>${spotifyEmbed}</p>`;
+            fixesApplied.push("spotify_embed");
           }
 
           if (issues.includes("missing_tags")) {

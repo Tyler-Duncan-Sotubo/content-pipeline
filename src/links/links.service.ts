@@ -39,6 +39,11 @@ export class LinksService {
   }
 
   private async trySpotify(query: string): Promise<StreamingLink | null> {
+    const track = await this.searchSpotifyTrack(query);
+    return track ? { platform: "Spotify", url: track.url } : null;
+  }
+
+  private async searchSpotifyTrack(query: string): Promise<{ url: string; id: string } | null> {
     if (!this.spotifyClientId || !this.spotifyClientSecret) return null;
     try {
       const token = await this.getSpotifyToken();
@@ -49,14 +54,20 @@ export class LinksService {
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error(`Spotify search failed (${res.status})`);
       const data = (await res.json()) as {
-        tracks: { items: { external_urls: { spotify: string } }[] };
+        tracks: { items: { id: string; external_urls: { spotify: string } }[] };
       };
       const track = data.tracks.items[0];
-      return track ? { platform: "Spotify", url: track.external_urls.spotify } : null;
+      return track ? { url: track.external_urls.spotify, id: track.id } : null;
     } catch (err) {
       this.logger.warn(`Spotify lookup failed: ${(err as Error).message}`);
       return null;
     }
+  }
+
+  /** Returns an embeddable open.spotify.com/embed/track/... URL for use in an <iframe>, or null if not found. */
+  async findSpotifyEmbedUrl(artist: string, songTitle: string): Promise<string | null> {
+    const track = await this.searchSpotifyTrack(`${artist} ${songTitle}`);
+    return track ? `https://open.spotify.com/embed/track/${track.id}` : null;
   }
 
   private async getSpotifyToken(): Promise<string> {

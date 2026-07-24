@@ -60,7 +60,28 @@ Structure and formatting:
   for the text paragraphs; embeds are re-attached separately after your rewrite.
 
 Requirements for excerpt: a real, keyword-relevant meta description (not a template, not
-generic filler) naming the artist and song, ending with an implicit call to stream/download.`;
+generic filler) naming the artist and song, ending with an implicit call to stream/download.
+
+Write like a human music blogger, not an AI summarizer. Concretely:
+- Never use these stock phrases or their close variants: "household name", "cements his/her
+  status", "showcases his/her versatility/artistry", "solidifies his/her place", "takes
+  listeners on a journey", "sonic experience/soundscape", "captivating/infectious/vibrant"
+  as generic filler adjectives, "in the ever-evolving landscape of...", "continues to
+  impress/prove himself", "further cements", "a testament to". If you notice yourself
+  reaching for a generalized compliment that could apply to almost any song by almost any
+  artist, cut it or replace it with something specific to THIS song.
+- Do not end with a summary paragraph that restates what you already said ("In conclusion,
+  X is...", "Overall, this track..."). End on the last concrete point instead - a detail
+  about the song, not a recap.
+- Vary sentence length and structure. Real writing has short, blunt sentences mixed with
+  longer ones - not every sentence needs a subordinate clause or a balanced "not just X,
+  but Y" construction. Avoid starting multiple paragraphs the same way (e.g. every section
+  opening with "[Artist] delivers...").
+- Prefer one concrete, specific observation over three vague ones. If you don't have a real
+  detail to add about the production or lyrics, say less rather than filling space with
+  a generic claim.
+- It's fine to have an opinion or a mild criticism, not just praise - real reviewers don't
+  universally love everything.`;
 
 export function auditUserPrompt(input: {
   artist: string;
