@@ -6,6 +6,9 @@ import { WordpressService, WpCredentials } from "../publish/wordpress.service";
 import { AuditGeneratorService } from "./audit-generator.service";
 import { AuditStateService } from "./audit-state.service";
 
+// A floor for detecting genuinely thin/broken posts (under this, a post almost
+// certainly doesn't serve search intent at all) - not a target length. The
+// rewrite prompt writes for search intent, not to hit a word count.
 const MIN_WORD_COUNT = 400;
 const STRAY_TEXT_PATTERNS = [/\badvertisement\b/i, /\blorem ipsum\b/i, /\[insert[^\]]*\]/i, /\[TBD\]/i];
 
@@ -91,18 +94,44 @@ function artistSlug(artist: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-/** Links the first mention of the artist's name in the body to their /artists/ page. */
-function linkArtistName(bodyHtml: string, artist: string): string {
-  const slug = artistSlug(artist);
-  const url = `https://tooxclusive.com/artists/${slug}/`;
-  const escaped = artist.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(escaped, "i");
-  let linked = false;
-  return bodyHtml.replace(pattern, (match) => {
-    if (linked) return match;
-    linked = true;
-    return `<a href="${url}">${match}</a>`;
-  });
+/**
+ * Extracts collaborator names from a full post title like "Adekunle Gold –
+ * Formation feat. Olamide" -> ["Adekunle Gold", "Olamide"]. Splits off the
+ * song title first (on -/–/—), then splits the artist portion on ft./feat/&/x,
+ * since ft./feat can appear either before or after the dash (e.g. "Fameye Ft
+ * X – Song" vs "Artist – Song feat. X").
+ */
+function splitCollaborators(postTitle: string): string[] {
+  const collabSplit = /\s*(?:ft\.?|feat\.?|featuring|&|,|\bx\b)\s*/i;
+  const [artistPart, ...songParts] = postTitle.split(/\s*[-–—]\s*/);
+  const songPart = songParts.join(" - ");
+  const names = [...artistPart.split(collabSplit), ...songPart.split(collabSplit).slice(1)];
+  return [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+}
+
+/**
+ * Links the first mention of each artist's name in the body. If the artist has
+ * a tooxclusive /artists/ profile page (i.e. is in the audit roster), link
+ * there; otherwise leave it as plain text - resolveTags() already gives them
+ * a WordPress /tag/ page, which is the fallback link surface for artists
+ * without a dedicated profile.
+ */
+function linkArtistNames(bodyHtml: string, artists: string[], rosterArtists: Set<string>): string {
+  let result = bodyHtml;
+  for (const artist of artists) {
+    if (!rosterArtists.has(artist.toLowerCase())) continue; // no /artists/ page - leave as plain text
+    const slug = artistSlug(artist);
+    const url = `https://tooxclusive.com/artists/${slug}/`;
+    const escaped = artist.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(escaped, "i");
+    let linked = false;
+    result = result.replace(pattern, (match) => {
+      if (linked) return match;
+      linked = true;
+      return `<a href="${url}">${match}</a>`;
+    });
+  }
+  return result;
 }
 
 @Injectable()
@@ -172,6 +201,10 @@ export class AuditService {
     const limit = limitOverride ?? this.maxPerRun;
     const credentials: WpCredentials | undefined = undefined; // audits use the default WP_USER account
 
+    // Full roster (not just this run's artist list) - used to decide whether a
+    // collaborator gets an /artists/ page link or falls back to a plain tag.
+    const rosterArtists = new Set(this.loadArtists("audit-artists.json").map((a) => a.toLowerCase()));
+
     const summary: AuditRunSummary = {
       artists,
       postsChecked: 0,
@@ -203,6 +236,19 @@ export class AuditService {
         try {
           const full = await this.wordpress.getPostForAudit(post.id, credentials);
           const { issues, wordCount, cleanText, embeds } = this.detectIssues(full);
+
+          // All artists on the track (title may read "A Ft. B") - both get
+          // tagged and linked, not just the one this run happened to search for.
+          const collaborators = splitCollaborators(post.title);
+          const allArtists = collaborators.length > 0 ? collaborators : [artist];
+
+          const existingTagNames = await this.wordpress.getTagNames(full.tags, credentials);
+          const missingCollaborators = allArtists.filter(
+            (a) => !existingTagNames.some((t) => t.toLowerCase() === a.toLowerCase())
+          );
+          if (missingCollaborators.length > 0 && !issues.includes("missing_tags")) {
+            issues.push("missing_tags");
+          }
 
           if (issues.length === 0) {
             this.state.markAudited(post.id, false, []);
@@ -250,10 +296,10 @@ export class AuditService {
             // player, additional images) goes after the rewritten text - same
             // placement the original content and the main pipeline both use.
             const [firstEmbed, ...restEmbeds] = embeds;
-            // Link the artist's first name-mention to their /artists/ page -
-            // the only available way to connect a post to that page, since no
-            // taxonomy relationship exists (see artistSlug/linkArtistName above).
-            const linkedBody = linkArtistName(rewritten.bodyHtml, artist);
+            // Link each collaborator's first name-mention to their /artists/
+            // page (if on the roster) - the only available way to connect a
+            // post to that page, since no taxonomy relationship exists.
+            const linkedBody = linkArtistNames(rewritten.bodyHtml, allArtists, rosterArtists);
             changes.content = [
               firstEmbed ? `<p>${firstEmbed}</p>` : "",
               linkedBody,
@@ -266,7 +312,11 @@ export class AuditService {
           }
 
           if (issues.includes("missing_tags")) {
-            const tagIds = await this.wordpress.resolveTags([artist], credentials);
+            // Keep existing tags and add whichever collaborators aren't tagged
+            // yet - a post already tagged with one artist shouldn't lose that
+            // tag just because a co-artist was missing.
+            const newTagIds = await this.wordpress.resolveTags(missingCollaborators, credentials);
+            const tagIds = [...new Set([...full.tags, ...newTagIds])];
             if (tagIds.length > 0) {
               changes.tags = tagIds;
               fixesApplied.push("tags");

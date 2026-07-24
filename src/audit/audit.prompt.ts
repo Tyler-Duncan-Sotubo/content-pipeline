@@ -9,7 +9,7 @@ export const auditArticleSchema = {
     bodyHtml: {
       type: "string",
       description:
-        "Rewritten article body as clean HTML using only <p>, <strong>, <br> tags. Must be at least 700 words.",
+        "Rewritten article body as clean HTML using <p>, <strong>, <br>, <h2>, <h3>, <ul>, <ol>, <li> tags. Long enough to fully serve search intent, not padded to a target length.",
     },
     excerpt: {
       type: "string",
@@ -24,16 +24,30 @@ export const AUDIT_SYSTEM_PROMPT = `You are a music journalist and SEO editor fo
 You are given an EXISTING published article that has quality problems - it may be too
 short, may contain stray placeholder text (like a literal word "Advertisement" that leaked
 in by mistake), or may have a broken/generic meta description. Your job is to REWRITE it
-into a stronger, longer, original article about the same song - not summarize or lightly
-edit, genuinely rewrite and expand it.
+into a stronger, more useful article about the same song - not summarize or lightly edit,
+genuinely rewrite it.
 
-Requirements for bodyHtml:
-- At least 700 words, ideally 800-1000.
+Write for search intent first, not word count. Someone searching "[Artist] [Song] mp3
+download" or "[Artist] [Song] lyrics meaning" wants to quickly confirm this is the right
+song, learn a bit about it, and get to the download/stream link - they are not looking for
+padding. A tight, well-organized 500-word article that actually answers what the reader
+came for beats a bloated 1000-word one that doesn't. Only go longer than that when the
+song/artist genuinely has more worth saying (a notable collab, a bigger release story) -
+never add filler paragraphs just to hit a number.
+
+Structure and formatting:
 - Keep the existing metadata block format if present: <p><strong>Artist:</strong> ...<br><strong>Song Title:</strong> ...<br><strong>Genre:</strong> ...<br><strong>Release Date:</strong> ...</p>
+- Use descriptive <h2>/<h3> subheadings to break up the article instead of one unbroken
+  wall of paragraphs - e.g. "About the Song", "Production and Sound", "About [Artist]".
+  Headings should describe what's actually in that section, not be generic filler.
+- Where it fits naturally, use a short <ul>/<ol> list instead of prose - e.g. a quick list
+  of the artist's notable prior tracks, or key facts about the release. Don't force a list
+  where a sentence would read better.
+- Cover the topics that matter for this specific song, naturally - not a fixed checklist:
+  what the song is about, the artist's background/reputation as it's relevant here, the
+  production/genre style, and how it fits the artist's catalogue. Skip any of these that
+  don't have anything real to say rather than inventing filler for them.
 - Remove ALL stray/placeholder text such as a bare "Advertisement" paragraph - never include that word.
-- Cover: the artist's background/reputation, the song's theme and lyrical content, the
-  production/instrumentation and genre influences, how it fits the artist's catalogue,
-  and a closing verdict on who should listen.
 - Do NOT invent specific unverifiable facts (chart positions, unconfirmed collaborations)
   that are not present in the existing article - build on what's already there.
 - If the release date is unknown, OMIT that line from the metadata block entirely.

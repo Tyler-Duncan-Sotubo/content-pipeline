@@ -94,6 +94,17 @@ export class WordpressService {
     return this.resolveTerms("/tags", this.splitArtistTags(rawNames), credentials);
   }
 
+  /** Resolves tag IDs to their names, for diffing "which collaborators are already tagged". */
+  async getTagNames(tagIds: number[], credentials?: WpCredentials): Promise<string[]> {
+    if (tagIds.length === 0) return [];
+    const found = await this.request<{ id: number; name: string }[]>(
+      `/tags?include=${tagIds.join(",")}&per_page=${tagIds.length}`,
+      {},
+      credentials,
+    );
+    return found.map((t) => t.name);
+  }
+
   /**
    * Checks tooxclusive itself for an existing post matching this artist + song
    * title. This is independent of state.json - a second line of defense against
