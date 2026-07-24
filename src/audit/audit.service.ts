@@ -46,6 +46,51 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+/**
+ * Extracts non-text embeds (images, iframes - Spotify/audio players, figures
+ * with captions) from the original content so they can be re-attached after
+ * an LLM rewrite. The rewrite only ever sees/produces plain text paragraphs;
+ * without this, every content_rewrite silently deletes the post's image and
+ * Spotify/audio embed (confirmed happening in production - see commit history).
+ */
+function extractEmbeds(html: string): string[] {
+  const embeds: string[] = [];
+  const patterns = [/<figure[\s\S]*?<\/figure>/gi, /<img[^>]*>/gi, /<iframe[\s\S]*?<\/iframe>/gi];
+  for (const pattern of patterns) {
+    const matches = html.match(pattern);
+    if (matches) embeds.push(...matches);
+  }
+  return embeds;
+}
+
+/**
+ * There is no WordPress taxonomy linking posts to tooxclusive's /artists/
+ * pages (confirmed: only "category" and "post_tag" exist via the REST API -
+ * /artists/ is standalone custom content, not a taxonomy). So the only way
+ * to link a post to the artist's profile page is a plain <a> in the body text.
+ */
+function artistSlug(artist: string): string {
+  return artist
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Links the first mention of the artist's name in the body to their /artists/ page. */
+function linkArtistName(bodyHtml: string, artist: string): string {
+  const slug = artistSlug(artist);
+  const url = `https://tooxclusive.com/artists/${slug}/`;
+  const escaped = artist.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(escaped, "i");
+  let linked = false;
+  return bodyHtml.replace(pattern, (match) => {
+    if (linked) return match;
+    linked = true;
+    return `<a href="${url}">${match}</a>`;
+  });
+}
+
 @Injectable()
 export class AuditService {
   private readonly logger = new Logger(AuditService.name);
@@ -72,11 +117,12 @@ export class AuditService {
     excerpt: string;
     contentHtml: string;
     tags: number[];
-  }): { issues: string[]; wordCount: number; cleanText: string } {
+  }): { issues: string[]; wordCount: number; cleanText: string; embeds: string[] } {
     const issues: string[] = [];
     const cleanExcerpt = stripHtml(input.excerpt);
     const cleanContent = stripHtml(input.contentHtml);
     const wordCount = cleanContent.split(/\s+/).filter(Boolean).length;
+    const embeds = extractEmbeds(input.contentHtml);
 
     if (!cleanExcerpt || cleanExcerpt.length < 20) {
       issues.push("missing_or_short_excerpt");
@@ -94,7 +140,7 @@ export class AuditService {
       issues.push("missing_tags");
     }
 
-    return { issues, wordCount, cleanText: cleanContent };
+    return { issues, wordCount, cleanText: cleanContent, embeds };
   }
 
   private logChange(postLink: string, issues: string[], fixesApplied: string[]): void {
@@ -142,7 +188,7 @@ export class AuditService {
         summary.postsChecked++;
         try {
           const full = await this.wordpress.getPostForAudit(post.id, credentials);
-          const { issues, wordCount, cleanText } = this.detectIssues(full);
+          const { issues, wordCount, cleanText, embeds } = this.detectIssues(full);
 
           if (issues.length === 0) {
             this.state.markAudited(post.id, false, []);
@@ -185,9 +231,24 @@ export class AuditService {
               continue;
             }
 
-            changes.content = rewritten.bodyHtml;
+            // Re-attach the original image/iframe embeds: first embed (usually
+            // the cover image) goes at the top, everything else (Spotify/audio
+            // player, additional images) goes after the rewritten text - same
+            // placement the original content and the main pipeline both use.
+            const [firstEmbed, ...restEmbeds] = embeds;
+            // Link the artist's first name-mention to their /artists/ page -
+            // the only available way to connect a post to that page, since no
+            // taxonomy relationship exists (see artistSlug/linkArtistName above).
+            const linkedBody = linkArtistName(rewritten.bodyHtml, artist);
+            changes.content = [
+              firstEmbed ? `<p>${firstEmbed}</p>` : "",
+              linkedBody,
+              ...restEmbeds.map((e) => `<p>${e}</p>`),
+            ]
+              .filter(Boolean)
+              .join("\n");
             changes.excerpt = rewritten.excerpt;
-            fixesApplied.push("content_rewrite", "excerpt");
+            fixesApplied.push("content_rewrite", "excerpt", "artist_link");
           }
 
           if (issues.includes("missing_tags")) {
