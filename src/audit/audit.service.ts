@@ -55,11 +55,25 @@ function stripHtml(html: string): string {
  */
 function extractEmbeds(html: string): string[] {
   const embeds: string[] = [];
-  const patterns = [/<figure[\s\S]*?<\/figure>/gi, /<img[^>]*>/gi, /<iframe[\s\S]*?<\/iframe>/gi];
-  for (const pattern of patterns) {
-    const matches = html.match(pattern);
-    if (matches) embeds.push(...matches);
+
+  // <figure> blocks first (they may wrap an <img>) - remove them from the
+  // working copy so the later bare-<img> pass doesn't also capture the same
+  // image a second time. Without this, a figure-wrapped image is extracted
+  // twice (once as the figure, once as the img inside it) and gets rendered
+  // twice in the rebuilt post.
+  const figureMatches = html.match(/<figure[\s\S]*?<\/figure>/gi) ?? [];
+  embeds.push(...figureMatches);
+  let remaining = html;
+  for (const figure of figureMatches) {
+    remaining = remaining.replace(figure, "");
   }
+
+  const imgMatches = remaining.match(/<img[^>]*>/gi) ?? [];
+  embeds.push(...imgMatches);
+
+  const iframeMatches = remaining.match(/<iframe[\s\S]*?<\/iframe>/gi) ?? [];
+  embeds.push(...iframeMatches);
+
   return embeds;
 }
 
