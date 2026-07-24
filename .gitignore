@@ -2,5 +2,7 @@ node_modules/
 dist/
 .env
 state.json
+audit-state.json
+audit-changes.log
 .DS_Store
 tsconfig.tsbuildinfo
