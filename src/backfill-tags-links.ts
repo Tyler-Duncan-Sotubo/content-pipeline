@@ -194,14 +194,29 @@ async function run() {
       console.log(`[${dryRun ? "dry-run" : "update"}] Post ${post.id} "${title}": ${summary}`);
 
       if (!dryRun) {
-        await wordpress.patchPost(
-          post.id,
-          {
-            ...(mergedTags ? { tags: mergedTags } : {}),
-            ...(contentChanged ? { content } : {}),
-          },
-          target.credentials,
-        );
+        const patch = {
+          ...(mergedTags ? { tags: mergedTags } : {}),
+          ...(contentChanged ? { content } : {}),
+        };
+        try {
+          await wordpress.patchPost(post.id, patch, target.credentials);
+        } catch (err) {
+          // Some older posts were published under the default WP_USER account
+          // before a dedicated per-pipeline user existed - that dedicated user
+          // can lack edit rights on them. Retry once under the default
+          // account before giving up on this post.
+          if ((err as Error).message.includes("403") && target.credentials) {
+            try {
+              await wordpress.patchPost(post.id, patch, undefined);
+            } catch (retryErr) {
+              console.warn(`[skip-write] Post ${post.id} "${title}": ${(retryErr as Error).message}`);
+              continue;
+            }
+          } else {
+            console.warn(`[skip-write] Post ${post.id} "${title}": ${(err as Error).message}`);
+            continue;
+          }
+        }
       }
     }
 
