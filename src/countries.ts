@@ -57,3 +57,17 @@ export const GHANA_SOURCE: GospelSourceConfig = {
   wpCategory: "GHANA",
   downloadLinkStyle: "download-attr",
 };
+
+/**
+ * Kenya source (citimuzik.com) - a multi-country site (not Kenya-dedicated
+ * like djmwanga/ghanasong), so results are filtered to artists in
+ * artists-kenya.json and title-matched (see SourceService.searchByArtist)
+ * rather than relying on a category/tag. tooxclusive's own "Kenya" category
+ * (id 88149) had gone stale since April before this was added.
+ */
+export const KENYA_SOURCE: GospelSourceConfig = {
+  name: "CitiMuzik Kenya",
+  sourceUrl: "https://www.citimuzik.com",
+  wpCategory: "Kenya",
+  downloadLinkStyle: "any-mp3-link",
+};

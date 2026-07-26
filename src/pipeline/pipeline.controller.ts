@@ -37,4 +37,13 @@ export class PipelineController {
   runGhana(@Body() body: { artists?: string[]; limit?: number }): Promise<RunSummary> {
     return this.pipeline.runGhana(body?.artists, body?.limit);
   }
+
+  /**
+   * Trigger a Kenya run (citimuzik.com), independent of the country pipeline.
+   * POST /pipeline/run-kenya  { "artists": ["Bien"], "limit": 2 }
+   */
+  @Post("run-kenya")
+  runKenya(@Body() body: { artists?: string[]; limit?: number }): Promise<RunSummary> {
+    return this.pipeline.runKenya(body?.artists, body?.limit);
+  }
 }

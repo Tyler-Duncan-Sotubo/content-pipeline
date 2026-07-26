@@ -7,7 +7,7 @@ import { GeneratorService, GeneratedArticle } from "../generate/generator.servic
 import { WordpressService, WpCredentials } from "../publish/wordpress.service";
 import { StateService } from "../state/state.service";
 import { LinksService } from "../links/links.service";
-import { getCountryConfig, GOSPEL_SOURCE, GHANA_SOURCE } from "../countries";
+import { getCountryConfig, GOSPEL_SOURCE, GHANA_SOURCE, KENYA_SOURCE } from "../countries";
 
 const PLAYER_EMBED_BASE = "https://stream-player-production.up.railway.app/embed";
 
@@ -98,6 +98,23 @@ export class PipelineService {
     };
   }
 
+  /** The Kenya-specific target, e.g. citimuzik.com. Independent of COUNTRY. */
+  private kenyaTarget(): RunTarget {
+    const kenyaUser = this.config.get<string>("WP_USER_KENYA");
+    const kenyaPassword = this.config.get<string>("WP_APP_PASSWORD_KENYA");
+    return {
+      site: {
+        baseUrl: KENYA_SOURCE.sourceUrl,
+        lookbackDays: this.lookbackDays,
+        downloadLinkStyle: KENYA_SOURCE.downloadLinkStyle,
+      },
+      artistsFile: "artists-kenya.json",
+      wpCategory: KENYA_SOURCE.wpCategory,
+      wpCredentials:
+        kenyaUser && kenyaPassword ? { user: kenyaUser, appPassword: kenyaPassword } : undefined,
+    };
+  }
+
   private loadArtists(filename: string): string[] {
     const file = join(process.cwd(), filename);
     if (!existsSync(file)) return [];
@@ -123,6 +140,11 @@ export class PipelineService {
   /** Runs the Ghana pipeline (ghanasong.org) independently of the country pipeline. */
   runGhana(artistsOverride?: string[], limitOverride?: number): Promise<RunSummary> {
     return this.runTarget(this.ghanaTarget(), artistsOverride, limitOverride);
+  }
+
+  /** Runs the Kenya pipeline (citimuzik.com) independently of the country pipeline. */
+  runKenya(artistsOverride?: string[], limitOverride?: number): Promise<RunSummary> {
+    return this.runTarget(this.kenyaTarget(), artistsOverride, limitOverride);
   }
 
   private async runTarget(
