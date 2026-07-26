@@ -284,34 +284,6 @@ export class WordpressService {
     );
   }
 
-  /**
-   * Real published posts mentioning this artist by name in the title, most
-   * recent first - used by the artist-page builder script to link to actual
-   * existing tooxclusive.com content instead of guessing at URLs.
-   */
-  async findPostsByArtistName(
-    artistName: string,
-    perPage = 10,
-  ): Promise<{ id: number; link: string; title: string }[]> {
-    const found = await this.request<{ id: number; link: string; title: { rendered: string } }[]>(
-      `/posts?search=${encodeURIComponent(artistName)}&per_page=${perPage}&orderby=date&order=desc`,
-    );
-    const normalize = (s: string) =>
-      s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
-    const decodeEntities = (s: string) =>
-      s
-        .replace(/&#8217;|&#8216;/g, "'")
-        .replace(/&#8220;|&#8221;/g, '"')
-        .replace(/&#8211;/g, "–")
-        .replace(/&#8212;/g, "—")
-        .replace(/&amp;/g, "&")
-        .replace(/&#038;/g, "&");
-    const target = normalize(artistName);
-    return found
-      .filter((p) => normalize(p.title.rendered).includes(target))
-      .map((p) => ({ id: p.id, link: p.link, title: decodeEntities(p.title.rendered) }));
-  }
-
   /** Creates a WP page. Used by the artist-page builder script. */
   async createPage(params: {
     title: string;
@@ -323,6 +295,25 @@ export class WordpressService {
     return this.request(`/pages`, {
       method: "POST",
       body: JSON.stringify({ ...params, status: "publish" }),
+    });
+  }
+
+  /** Looks up a page by its exact slug. Used by the artist-page builder script to update in place. */
+  async findPageBySlug(slug: string): Promise<{ id: number; link: string } | undefined> {
+    const found = await this.request<{ id: number; link: string; slug: string }[]>(
+      `/pages?slug=${encodeURIComponent(slug)}`,
+    );
+    return found.find((p) => p.slug === slug);
+  }
+
+  /** Updates an existing WP page's content/meta in place. Used by the artist-page builder script. */
+  async updatePage(
+    pageId: number,
+    params: { content: string; meta?: Record<string, unknown> },
+  ): Promise<{ id: number; link: string }> {
+    return this.request(`/pages/${pageId}`, {
+      method: "POST",
+      body: JSON.stringify(params),
     });
   }
 

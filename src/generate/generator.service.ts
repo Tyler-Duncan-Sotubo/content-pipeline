@@ -76,18 +76,18 @@ export class GeneratorService {
     return JSON.parse(block.text) as GeneratedArticle;
   }
 
-  generateArtistBio(artistName: string, roster: string): Promise<GeneratedArtistBio> {
+  generateArtistBio(artistName: string): Promise<GeneratedArtistBio> {
     return this.provider === "anthropic"
-      ? this.generateBioWithAnthropic(artistName, roster)
-      : this.generateBioWithOpenAI(artistName, roster);
+      ? this.generateBioWithAnthropic(artistName)
+      : this.generateBioWithOpenAI(artistName);
   }
 
-  private async generateBioWithOpenAI(artistName: string, roster: string): Promise<GeneratedArtistBio> {
+  private async generateBioWithOpenAI(artistName: string): Promise<GeneratedArtistBio> {
     const response = await this.openai!.chat.completions.create({
       model: this.openaiModel,
       messages: [
         { role: "system", content: ARTIST_BIO_SYSTEM_PROMPT },
-        { role: "user", content: artistBioUserPrompt(artistName, roster) },
+        { role: "user", content: artistBioUserPrompt(artistName) },
       ],
       response_format: {
         type: "json_schema",
@@ -100,12 +100,12 @@ export class GeneratorService {
     return JSON.parse(content) as GeneratedArtistBio;
   }
 
-  private async generateBioWithAnthropic(artistName: string, roster: string): Promise<GeneratedArtistBio> {
+  private async generateBioWithAnthropic(artistName: string): Promise<GeneratedArtistBio> {
     const response = await this.anthropic!.messages.create({
       model: this.anthropicModel,
       max_tokens: 4000,
       system: ARTIST_BIO_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: artistBioUserPrompt(artistName, roster) }],
+      messages: [{ role: "user", content: artistBioUserPrompt(artistName) }],
       output_config: {
         format: { type: "json_schema", schema: artistBioSchema as unknown as Record<string, unknown> },
       },

@@ -1,15 +1,19 @@
 /**
- * Creates /artists/{slug}/ profile pages (matching the Burna Boy/Ruger template)
- * for artists from artists-missing-pages.json that don't have one yet.
+ * Creates /artists/{slug}/ profile pages matching the real template
+ * (e.g. Fireboy DML, Burna Boy) for artists from artists-missing-pages.json
+ * that don't have one yet.
  *
- * Unlike Burna Boy's page, we deliberately DO NOT include Real Name / Date of
- * Birth / Label in the meta list - we have no verified source for those facts
- * for these artists, and the LLM bio prompt is instructed never to invent them.
- * Genre comes from the LLM (safe - it's describable from the artist's own
- * catalogue, not a specific unverifiable claim like a birthdate).
+ * Bio facts (real name, DOB, hometown, label) and discography (real
+ * albums/tracks) are sourced from the LLM's own knowledge of the artist -
+ * the prompt instructs it to state a specific fact only when confident, and
+ * leave it blank rather than invent one.
  *
- * Discography links are real: each artist's existing tooxclusive.com posts are
- * looked up live via WordpressService.findPostsByArtistName rather than guessed.
+ * The right column uses the same three jnews_block widgets as every other
+ * artist page: Latest Songs, Latest News, Lyrics - scoped to this artist via
+ * their real WordPress tag IDs (resolved/created via resolveTagsOnly, same
+ * as the main pipeline uses for song posts) plus their "{Name} News" tag.
+ * Category IDs (Songs/A-List/HOT!!/News/Lyrics) are fixed site-wide values,
+ * confirmed against Fireboy DML's live page.
  *
  * Usage: npm run build:artist-pages -- [--dry-run] [--limit N]
  */
@@ -20,8 +24,16 @@ import { join } from "node:path";
 import { AppModule } from "./app.module";
 import { WordpressService } from "./publish/wordpress.service";
 import { GeneratorService } from "./generate/generator.service";
+import { DiscographyAlbum, GeneratedArtistBio } from "./generate/artist-bio.prompt";
 
 const ARTISTS_PARENT_PAGE_ID = 465247; // https://tooxclusive.com/artists/
+
+// Confirmed live from Fireboy DML's page (id 465247's children use the same fixed IDs)
+const CATEGORY_SONGS = 1; // Songs
+const CATEGORY_A_LIST = 69188; // A-List
+const CATEGORY_HOT = 30461; // HOT!!
+const CATEGORY_NEWS = 817; // News
+const CATEGORY_LYRICS = 3632; // Lyrics
 
 interface MissingArtist {
   name: string;
@@ -34,70 +46,83 @@ function slugFromHref(href: string): string {
   return parts[parts.length - 1];
 }
 
-function rosterForArtist(): string {
-  // The A-Z card list is Nigerian/African-pop featured artists, not tied to
-  // one of the pipeline's regional rosters - use a neutral general context.
-  return "General African Pop/Amapiano";
-}
-
 function encodeVcRawHtml(raw: string): string {
   return Buffer.from(encodeURIComponent(raw), "utf-8").toString("base64");
 }
 
-function buildProfileHeaderHtml(name: string, genre: string, imgUrl: string): string {
+function metaListItem(label: string, value: string): string {
+  return value ? `      <li><strong>${label}:</strong> ${value}</li>\n` : "";
+}
+
+function buildProfileHeaderHtml(name: string, bio: GeneratedArtistBio, imgUrl: string): string {
+  const metaItems =
+    metaListItem("Real Name", bio.realName) +
+    metaListItem("Alias Name", bio.aliasName) +
+    metaListItem("Date of Birth", bio.dateOfBirth) +
+    metaListItem("Hometown", bio.hometown) +
+    metaListItem("Label", bio.label) +
+    metaListItem("Genre", bio.genre);
+
   return `<div class="artist-profile">
   <div class="artist-details">
-   <div class="artist-return">
-      <a href="https://tooxclusive.com/artists/">← Back to All Artists</a>
+    <div class="artist-return">
+      <a href="https://tooxclusive.com/artists/">← Back To Artists</a>
     </div>
+
     <h2>${name}</h2>
     <ul class="artist-meta">
-      <li><strong>Genre:</strong> ${genre}</li>
-    </ul>
+${metaItems}    </ul>
   </div>
+
   <div class="artist-image">
-    <img src="${imgUrl}" alt="${name} portrait">
+    <img src="${imgUrl}" alt="${name} portrait" />
   </div>
 </div>`;
 }
 
-function buildBioHtml(name: string, intro: string, earlyLife: string, careerHighlights: string): string {
-  return `<h2>${name} Bio</h2>
-<p>${intro}</p>
-<hr />
-<h2>Background</h2>
-<p>${earlyLife}</p>
-<hr />
-<h2>Career</h2>
-<p>${careerHighlights}</p>`;
-}
-
-function buildDiscographyHtml(posts: { link: string; title: string }[]): string {
-  if (posts.length === 0) return "";
-  const items = posts.map((p) => `<li><a href="${p.link}">${p.title}</a></li>`).join("\n");
-  return `<hr />
-<h2>Featured On tooXclusive</h2>
-<ul>
-${items}
-</ul>`;
+function buildDiscographyHtml(albums: DiscographyAlbum[]): string {
+  if (albums.length === 0) return "";
+  const blocks = albums
+    .map((album) => {
+      const trackList = album.tracks.map((t) => `\n${t}`).join("");
+      return `${album.title} (${album.year})${trackList}\n`;
+    })
+    .join("\n");
+  return `\n${blocks}`;
 }
 
 function buildPageContent(
   name: string,
-  genre: string,
+  bio: GeneratedArtistBio,
   imgUrl: string,
-  bio: { intro: string; earlyLife: string; careerHighlights: string },
-  discographyHtml: string,
+  songTagId: number | undefined,
+  newsTagId: number | undefined,
 ): string {
-  const headerBlock = encodeVcRawHtml(buildProfileHeaderHtml(name, genre, imgUrl));
-  const bioText = buildBioHtml(name, bio.intro, bio.earlyLife, bio.careerHighlights) + "\n" + discographyHtml;
+  const headerBlock = encodeVcRawHtml(buildProfileHeaderHtml(name, bio, imgUrl));
+  const discographyText = buildDiscographyHtml(bio.discography);
+
+  const songTags = [songTagId, newsTagId].filter(Boolean).join(",");
+  const newsTags = [songTagId, newsTagId].filter(Boolean).join(",");
 
   return (
     `[vc_row full_width="stretch_row_content_no_spaces" enable_overlay="yes" vc_row_background="" ` +
-    `css=".vc_custom_1771767147496{margin-top: -70px !important;}" overlay_color="#000000"]` +
+    `css=".vc_custom_1771976788010{margin-top: -70px !important;}" overlay_color="#000000"]` +
     `[vc_column][vc_raw_html]${headerBlock}[/vc_raw_html][/vc_column][/vc_row]` +
-    `[vc_row vc_row_background=""][vc_column width="2/3"][vc_wp_text]\n${bioText}\n[/vc_wp_text][/vc_column]` +
-    `[vc_column width="1/3"][vc_widget_sidebar sidebar_id="home-5"][/vc_column][/vc_row]`
+    `[vc_row][vc_column width="2/3"][vc_wp_text title="${name} Bio"]\n\n${bio.bioHtml}\n\n[/vc_wp_text]` +
+    `[vc_separator]` +
+    `[jnews_block_21 compatible_column_notice="" sticky_post="" sponsor="" number_post="6" post_offset="0" ` +
+    `included_only="" include_category="${CATEGORY_SONGS},${CATEGORY_A_LIST},${CATEGORY_HOT}" ` +
+    `exclude_category="${CATEGORY_NEWS},${CATEGORY_LYRICS}" include_tag="${songTags}" ` +
+    `exclude_visited_post="" first_title="Latest Songs"]` +
+    `[vc_separator]` +
+    `[jnews_block_9 compatible_column_notice="" sticky_post="" sponsor="" number_post="4" post_offset="0" ` +
+    `included_only="" include_category="${CATEGORY_NEWS}" include_tag="${newsTags}" ` +
+    `exclude_visited_post="" first_title="Latest News"]` +
+    `[vc_separator]` +
+    `[jnews_block_22 compatible_column_notice="" sticky_post="" sponsor="" number_post="6" post_offset="0" ` +
+    `included_only="" include_category="${CATEGORY_LYRICS}" include_tag="${songTags}" ` +
+    `exclude_visited_post="" first_title="Lyrics"][/vc_column]` +
+    `[vc_column width="1/3"][vc_wp_text title="Discography"]\n${discographyText}\n[/vc_wp_text][/vc_column][/vc_row]`
   );
 }
 
@@ -157,33 +182,43 @@ async function run() {
     const slug = slugFromHref(artist.href);
     try {
       console.log(`Generating bio for "${artist.name}"...`);
-      const bio = await generator.generateArtistBio(artist.name, rosterForArtist());
+      const bio = await generator.generateArtistBio(artist.name);
 
-      console.log(`Searching tooxclusive for existing "${artist.name}" posts...`);
-      const posts = await wordpress.findPostsByArtistName(artist.name, 8);
-      const discographyHtml = buildDiscographyHtml(posts);
+      console.log(`Resolving tags for "${artist.name}"...`);
+      const [songTagIds, newsTagIds] = await Promise.all([
+        wordpress.resolveTagsOnly([artist.name]),
+        wordpress.resolveTagsOnly([`${artist.name} News`]),
+      ]);
+      const songTagId = songTagIds[0];
+      const newsTagId = newsTagIds[0];
 
-      const content = buildPageContent(artist.name, bio.genre, artist.img, bio, discographyHtml);
+      const content = buildPageContent(artist.name, bio, artist.img, songTagId, newsTagId);
+
+      const existing = await wordpress.findPageBySlug(slug);
 
       if (dryRun) {
         console.log(
-          `[dry-run] Would create /artists/${slug}/ - genre="${bio.genre}", ${posts.length} linked post(s)`,
+          `[dry-run] Would ${existing ? "update" : "create"} /artists/${slug}/ - genre="${bio.genre}", ` +
+            `${bio.discography.length} album(s), songTag=${songTagId}, newsTag=${newsTagId}`,
         );
-        console.log(`--- bio preview ---\n${JSON.stringify(bio, null, 2)}\n--- linked posts ---`);
-        posts.forEach((p) => console.log(`  ${p.title} -> ${p.link}`));
-        console.log("---");
+        console.log(`--- bio preview ---\n${JSON.stringify(bio, null, 2)}\n---`);
         created++;
         continue;
       }
 
-      const page = await wordpress.createPage({
-        title: artist.name,
-        slug,
-        content,
-        parent: ARTISTS_PARENT_PAGE_ID,
-        meta: PAGE_META,
-      });
-      console.log(`Created: ${page.link}`);
+      if (existing) {
+        const page = await wordpress.updatePage(existing.id, { content, meta: PAGE_META });
+        console.log(`Updated: ${page.link}`);
+      } else {
+        const page = await wordpress.createPage({
+          title: artist.name,
+          slug,
+          content,
+          parent: ARTISTS_PARENT_PAGE_ID,
+          meta: PAGE_META,
+        });
+        console.log(`Created: ${page.link}`);
+      }
       created++;
     } catch (err) {
       console.error(`FAILED for "${artist.name}": ${(err as Error).message}`);
