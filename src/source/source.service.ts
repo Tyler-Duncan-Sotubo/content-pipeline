@@ -103,8 +103,34 @@ export class SourceService {
     return this.fetchPosts(site, { per_page: String(perPage) });
   }
 
-  searchByArtist(site: SourceSiteConfig, artist: string, perPage = 10): Promise<SourcePost[]> {
-    return this.fetchPosts(site, { search: artist, per_page: String(perPage) });
+  /**
+   * WordPress's ?search= does loose relevance matching across the whole page,
+   * not "this artist is credited here" - e.g. searching "Lava Lava" can match
+   * a post that only contains the unrelated substring "LavaTablet" in embedded
+   * JS, or fuzzy-matches "flava"/"lava" in an unrelated excerpt. Only trust a
+   * result if the artist name genuinely appears in the post TITLE, which is
+   * where a real artist credit belongs ("Artist - Song" / "Artist Ft. X - Song").
+   */
+  private titleMatchesArtist(title: string, artist: string): boolean {
+    const normalize = (s: string) =>
+      s
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+    return normalize(title).includes(normalize(artist));
+  }
+
+  async searchByArtist(site: SourceSiteConfig, artist: string, perPage = 10): Promise<SourcePost[]> {
+    const posts = await this.fetchPosts(site, { search: artist, per_page: String(perPage) });
+    const filtered = posts.filter((p) => this.titleMatchesArtist(p.title, artist));
+    const dropped = posts.length - filtered.length;
+    if (dropped > 0) {
+      this.logger.warn(
+        `Dropped ${dropped} false-positive search result(s) for "${artist}" (title didn't actually contain the artist name)`
+      );
+    }
+    return filtered;
   }
 
   /**
