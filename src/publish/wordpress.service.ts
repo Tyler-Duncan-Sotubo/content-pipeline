@@ -89,9 +89,16 @@ export class WordpressService {
    * Resolve tag names to IDs, creating any that don't exist yet. Tag creation
    * requires Editor/Admin role; if the WP user can't create terms, skip those
    * tags rather than failing the whole post.
+   *
+   * The LLM's `tags` field is not reliable on its own - it sometimes drops a
+   * featured artist or the primary artist entirely. `article.artist` (parsed
+   * straight from the source post, e.g. "Jux Ft. Mbosso") is the ground truth
+   * for who's on the track, so it's always unioned into the tag list here
+   * rather than trusting the model's tags array alone.
    */
-  resolveTags(rawNames: string[], credentials?: WpCredentials): Promise<number[]> {
-    return this.resolveTerms("/tags", this.splitArtistTags(rawNames), credentials);
+  resolveTags(rawNames: string[], articleArtist: string, credentials?: WpCredentials): Promise<number[]> {
+    const names = this.splitArtistTags([...rawNames, articleArtist]);
+    return this.resolveTerms("/tags", names, credentials);
   }
 
   /**
@@ -203,7 +210,7 @@ export class WordpressService {
     categoryName?: string,
     credentials?: WpCredentials,
   ): Promise<PublishResult> {
-    const tagIds = await this.resolveTags(article.tags, credentials);
+    const tagIds = await this.resolveTags(article.tags, article.artist, credentials);
     const categoryId = categoryName ? await this.resolveCategory(categoryName, credentials) : undefined;
     const uploadedImage = imageUrl
       ? await this.uploadFeaturedImage(imageUrl, article.title, credentials)
