@@ -243,6 +243,47 @@ export class WordpressService {
     }
   }
 
+  /** Fetches raw posts in a category, paginated. Used by the retag/relink backfill script. */
+  async listPostsByCategory(
+    categoryId: number,
+    page: number,
+    perPage = 50,
+    credentials?: WpCredentials,
+  ): Promise<{ id: number; link: string; title: { rendered: string }; content: { rendered: string }; tags: number[] }[]> {
+    return this.request(
+      `/posts?categories=${categoryId}&page=${page}&per_page=${perPage}&_fields=id,link,title,content,tags`,
+      {},
+      credentials,
+    );
+  }
+
+  /** Resolves a category name to its ID (public wrapper for the backfill script). */
+  resolveCategoryId(name: string, credentials?: WpCredentials): Promise<number | undefined> {
+    return this.resolveCategory(name, credentials);
+  }
+
+  /** Resolve tag names to IDs without unioning in any extra artist name. Used by the backfill script. */
+  resolveTagsOnly(names: string[], credentials?: WpCredentials): Promise<number[]> {
+    return this.resolveTerms("/tags", this.splitArtistTags(names), credentials);
+  }
+
+  /**
+   * Patches a post's tags and/or content. Used by the additive-only retag/relink
+   * backfill script - callers are responsible for merging with existing data
+   * (e.g. union tags, don't overwrite) before calling this.
+   */
+  async patchPost(
+    postId: number,
+    updates: { tags?: number[]; content?: string },
+    credentials?: WpCredentials,
+  ): Promise<void> {
+    await this.request(
+      `/posts/${postId}`,
+      { method: "POST", body: JSON.stringify(updates) },
+      credentials,
+    );
+  }
+
   async publishArticle(
     article: GeneratedArticle,
     imageUrl?: string,

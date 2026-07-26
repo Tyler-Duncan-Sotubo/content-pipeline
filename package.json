@@ -10,6 +10,7 @@
     "pipeline:gospel": "ts-node src/cli-gospel.ts",
     "pipeline:ghana": "ts-node src/cli-ghana.ts",
     "pipeline:kenya": "ts-node src/cli-kenya.ts",
+    "backfill:tags": "ts-node src/backfill-tags-links.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
