@@ -68,11 +68,19 @@ function decodeHtmlEntities(s: string): string {
     .replace(/&#038;/g, "&");
 }
 
-/** "Njerae – Baki Pekee Yako Ft Watendawili" -> "Njerae" (primary artist before the dash). */
-function parseArtistFromTitle(rawTitle: string): string | undefined {
-  const title = decodeHtmlEntities(rawTitle).replace(/^\(?VIDEO\)?\s*/i, "");
-  const [artistPart] = title.split(/\s*[-–—]\s*/);
-  return artistPart?.trim() || undefined;
+/**
+ * Pulls the artist straight out of the post's own existing
+ * "<strong>Artist:</strong> X<br>" metadata line - the ground truth for what
+ * this specific post was published with, rather than re-guessing from the
+ * title. Returns undefined for any post that doesn't have this metadata
+ * block at all, which is exactly the signal that a post is NOT one of this
+ * pipeline's song reviews (e.g. an editorial/feature article) and must be
+ * left alone entirely.
+ */
+function parseArtistFromContent(content: string): string | undefined {
+  const match = content.match(/<strong>Artist:<\/strong>\s*(?:<a[^>]*>)?([^<]+?)(?:<\/a>)?\s*<br/i);
+  if (!match) return undefined;
+  return decodeHtmlEntities(match[1]).trim() || undefined;
 }
 
 function splitArtists(name: string): string[] {
@@ -124,9 +132,11 @@ async function run() {
     for (const post of posts) {
       totalPostsSeen++;
       const title = post.title.rendered;
-      const artist = parseArtistFromTitle(title);
+      const artist = parseArtistFromContent(post.content.rendered);
       if (!artist) {
-        console.warn(`[skip] Post ${post.id} "${title}" - could not parse artist from title`);
+        console.warn(
+          `[skip] Post ${post.id} "${title}" - no "Artist:" metadata block found (not a song-review post - leaving untouched)`,
+        );
         continue;
       }
 
