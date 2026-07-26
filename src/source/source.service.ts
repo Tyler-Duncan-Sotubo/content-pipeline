@@ -15,6 +15,11 @@ export interface SourceSiteConfig {
   /** Only consider posts from the last N days (0 = no limit). */
   lookbackDays?: number;
   /**
+   * Exclude posts from the last N days (e.g. during a backfill, so this run
+   * doesn't compete with production's live crons for the same recent posts).
+   */
+  excludeLastDays?: number;
+  /**
    * The MP3 download link's HTML pattern varies by site:
    * - "download-attr": <a href="....mp3" ... download> (djmwanga, ckmusicpromos)
    * - "any-mp3-link": any <a href="....mp3"> link, no attribute required (ceenaija)
@@ -62,6 +67,11 @@ export class SourceService {
     if (lookbackDays > 0) {
       const after = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
       url.searchParams.set("after", after.toISOString());
+    }
+    const excludeLastDays = site.excludeLastDays ?? 0;
+    if (excludeLastDays > 0) {
+      const before = new Date(Date.now() - excludeLastDays * 24 * 60 * 60 * 1000);
+      url.searchParams.set("before", before.toISOString());
     }
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 

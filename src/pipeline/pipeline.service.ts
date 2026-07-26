@@ -36,6 +36,7 @@ export class PipelineService {
   private readonly logger = new Logger(PipelineService.name);
   private readonly maxPerRun: number;
   private readonly lookbackDays: number;
+  private readonly excludeLastDays: number;
 
   constructor(
     private readonly config: ConfigService,
@@ -47,6 +48,7 @@ export class PipelineService {
   ) {
     this.maxPerRun = Number(config.get("MAX_PER_RUN") ?? 3);
     this.lookbackDays = Number(config.get("LOOKBACK_DAYS") ?? 7);
+    this.excludeLastDays = Number(config.get("EXCLUDE_LAST_DAYS") ?? 0);
   }
 
   /** The main country-driven target, e.g. Tanzania via djmwanga.com. */
@@ -57,6 +59,7 @@ export class PipelineService {
       site: {
         baseUrl: override ?? country.sourceUrl,
         lookbackDays: this.lookbackDays,
+        excludeLastDays: this.excludeLastDays,
         downloadLinkStyle: country.downloadLinkStyle ?? "download-attr",
       },
       artistsFile: "artists.json",
@@ -72,6 +75,7 @@ export class PipelineService {
       site: {
         baseUrl: GOSPEL_SOURCE.sourceUrl,
         lookbackDays: this.lookbackDays,
+        excludeLastDays: this.excludeLastDays,
         downloadLinkStyle: GOSPEL_SOURCE.downloadLinkStyle,
       },
       artistsFile: "artists-gospel.json",
@@ -89,6 +93,7 @@ export class PipelineService {
       site: {
         baseUrl: GHANA_SOURCE.sourceUrl,
         lookbackDays: this.lookbackDays,
+        excludeLastDays: this.excludeLastDays,
         downloadLinkStyle: GHANA_SOURCE.downloadLinkStyle,
       },
       artistsFile: "artists-ghana.json",
@@ -106,6 +111,7 @@ export class PipelineService {
       site: {
         baseUrl: KENYA_SOURCE.sourceUrl,
         lookbackDays: this.lookbackDays,
+        excludeLastDays: this.excludeLastDays,
         downloadLinkStyle: KENYA_SOURCE.downloadLinkStyle,
       },
       artistsFile: "artists-kenya.json",

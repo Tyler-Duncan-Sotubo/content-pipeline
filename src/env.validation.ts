@@ -34,6 +34,9 @@ export const envSchema = z
     // Overrides the country's default source site, if set
     SOURCE_URL: z.string().url().optional(),
     LOOKBACK_DAYS: z.coerce.number().int().min(0).default(7),
+    // For backfill runs: skip posts from the last N days so this run doesn't
+    // compete with production's live crons over the same recent posts.
+    EXCLUDE_LAST_DAYS: z.coerce.number().int().min(0).default(0),
     MAX_PER_RUN: z.coerce.number().int().min(1).default(3),
 
     // Logging - Better Stack (Logtail) in production; pretty console in dev.
