@@ -11,6 +11,7 @@
     "pipeline:ghana": "ts-node src/cli-ghana.ts",
     "pipeline:kenya": "ts-node src/cli-kenya.ts",
     "backfill:tags": "ts-node src/backfill-tags-links.ts",
+    "build:artist-pages": "ts-node src/build-artist-pages.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

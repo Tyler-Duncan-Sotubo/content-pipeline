@@ -4,8 +4,15 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { SourcePost } from "../source/source.service";
 import { GeneratedArticle, articleSchema, SYSTEM_PROMPT, userPrompt } from "./article.prompt";
+import {
+  GeneratedArtistBio,
+  artistBioSchema,
+  ARTIST_BIO_SYSTEM_PROMPT,
+  artistBioUserPrompt,
+} from "./artist-bio.prompt";
 
 export { GeneratedArticle } from "./article.prompt";
+export { GeneratedArtistBio } from "./artist-bio.prompt";
 
 @Injectable()
 export class GeneratorService {
@@ -67,5 +74,45 @@ export class GeneratorService {
     const block = response.content.find((b) => b.type === "text");
     if (!block || block.type !== "text") throw new Error("Anthropic returned an empty response");
     return JSON.parse(block.text) as GeneratedArticle;
+  }
+
+  generateArtistBio(artistName: string, roster: string): Promise<GeneratedArtistBio> {
+    return this.provider === "anthropic"
+      ? this.generateBioWithAnthropic(artistName, roster)
+      : this.generateBioWithOpenAI(artistName, roster);
+  }
+
+  private async generateBioWithOpenAI(artistName: string, roster: string): Promise<GeneratedArtistBio> {
+    const response = await this.openai!.chat.completions.create({
+      model: this.openaiModel,
+      messages: [
+        { role: "system", content: ARTIST_BIO_SYSTEM_PROMPT },
+        { role: "user", content: artistBioUserPrompt(artistName, roster) },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "artist_bio", strict: true, schema: artistBioSchema },
+      },
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (!content) throw new Error("OpenAI returned an empty response");
+    return JSON.parse(content) as GeneratedArtistBio;
+  }
+
+  private async generateBioWithAnthropic(artistName: string, roster: string): Promise<GeneratedArtistBio> {
+    const response = await this.anthropic!.messages.create({
+      model: this.anthropicModel,
+      max_tokens: 4000,
+      system: ARTIST_BIO_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: artistBioUserPrompt(artistName, roster) }],
+      output_config: {
+        format: { type: "json_schema", schema: artistBioSchema as unknown as Record<string, unknown> },
+      },
+    });
+
+    const block = response.content.find((b) => b.type === "text");
+    if (!block || block.type !== "text") throw new Error("Anthropic returned an empty response");
+    return JSON.parse(block.text) as GeneratedArtistBio;
   }
 }
