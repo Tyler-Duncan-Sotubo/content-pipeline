@@ -57,7 +57,17 @@ export class WordpressService {
     return [...new Set(split.map((n) => n.trim()).filter(Boolean))];
   }
 
-  /** Resolves names against a WP taxonomy endpoint (e.g. /tags or /categories), creating missing terms. */
+  private normalizeTermName(s: string): string {
+    return s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
+  }
+
+  /**
+   * Resolves names against a WP taxonomy endpoint (e.g. /tags or /categories),
+   * creating missing terms. Matching is normalization-tolerant (case, accents,
+   * punctuation) so an artist who already has an established tag/"artist page"
+   * (e.g. "Sauti Sol") is always reused instead of a near-duplicate tag getting
+   * created for a slightly different-looking variant of the same name.
+   */
   private async resolveTerms(taxonomyPath: string, names: string[], credentials?: WpCredentials): Promise<number[]> {
     const ids: number[] = [];
     for (const name of names) {
@@ -67,7 +77,8 @@ export class WordpressService {
           {},
           credentials,
         );
-        const match = found.find((t) => t.name.toLowerCase() === name.toLowerCase());
+        const target = this.normalizeTermName(name);
+        const match = found.find((t) => this.normalizeTermName(t.name) === target);
         if (match) {
           ids.push(match.id);
         } else {
@@ -99,6 +110,34 @@ export class WordpressService {
   resolveTags(rawNames: string[], articleArtist: string, credentials?: WpCredentials): Promise<number[]> {
     const names = this.splitArtistTags([...rawNames, articleArtist]);
     return this.resolveTerms("/tags", names, credentials);
+  }
+
+  /**
+   * tooxclusive.com has a dedicated per-artist hub page at /artists/{slug}/
+   * (a WP `page`, not a tag) for artists it has profiled, e.g.
+   * https://tooxclusive.com/artists/ruger/. When one exists for this artist,
+   * we link the Artist metadata line to it instead of the plain tag archive -
+   * confirmed live via GET /wp-json/wp/v2/pages?search=<name>.
+   */
+  async findArtistPage(
+    artistName: string,
+    credentials?: WpCredentials,
+  ): Promise<{ link: string } | undefined> {
+    try {
+      const found = await this.request<{ link: string; title: { rendered: string } }[]>(
+        `/pages?search=${encodeURIComponent(artistName)}`,
+        {},
+        credentials,
+      );
+      const target = this.normalizeTermName(artistName);
+      const match = found.find(
+        (p) => this.normalizeTermName(p.title.rendered) === target && p.link.includes("/artists/"),
+      );
+      return match ? { link: match.link } : undefined;
+    } catch (err) {
+      this.logger.warn(`Artist page lookup failed for "${artistName}": ${(err as Error).message}`);
+      return undefined;
+    }
   }
 
   /**
@@ -211,6 +250,11 @@ export class WordpressService {
     credentials?: WpCredentials,
   ): Promise<PublishResult> {
     const tagIds = await this.resolveTags(article.tags, article.artist, credentials);
+    if (tagIds.length === 0) {
+      throw new Error(
+        `Refusing to publish "${article.title}" untagged - tag resolution returned zero tags for artist(s) "${article.artist}"`,
+      );
+    }
     const categoryId = categoryName ? await this.resolveCategory(categoryName, credentials) : undefined;
     const uploadedImage = imageUrl
       ? await this.uploadFeaturedImage(imageUrl, article.title, credentials)

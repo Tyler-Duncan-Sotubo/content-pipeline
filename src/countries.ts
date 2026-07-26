@@ -5,6 +5,8 @@ export interface CountryConfig {
   sourceUrl: string;
   /** Name of the matching category on the destination WP site (tooxclusive.com), e.g. "Tanzania". */
   wpCategory: string;
+  /** Slug of that category on tooxclusive.com, e.g. "tanzania" -> /tanzania. Confirmed live, not assumed from the name. */
+  wpCategorySlug: string;
   /** MP3 download-link HTML pattern for this source site. See SourceSiteConfig. */
   downloadLinkStyle?: "download-attr" | "any-mp3-link";
 }
@@ -19,6 +21,7 @@ export const COUNTRIES: Record<string, CountryConfig> = {
     name: "Tanzania",
     sourceUrl: "https://djmwanga.com",
     wpCategory: "Tanzania",
+    wpCategorySlug: "tanzania",
   },
 };
 
@@ -36,6 +39,8 @@ export interface GospelSourceConfig {
   name: string;
   sourceUrl: string;
   wpCategory: string;
+  /** Slug of that category on tooxclusive.com. Confirmed live, not assumed from the name. */
+  wpCategorySlug: string;
   downloadLinkStyle: "download-attr" | "any-mp3-link";
 }
 
@@ -44,6 +49,7 @@ export const GOSPEL_SOURCE: GospelSourceConfig = {
   name: "CeeNaija Gospel",
   sourceUrl: "https://www.ceenaija.com",
   wpCategory: "Gospel",
+  wpCategorySlug: "gospel",
   downloadLinkStyle: "any-mp3-link",
 };
 
@@ -55,6 +61,9 @@ export const GHANA_SOURCE: GospelSourceConfig = {
   name: "GhanaSong",
   sourceUrl: "https://ghanasong.org",
   wpCategory: "GHANA",
+  // Confirmed live via /wp-json/wp/v2/categories?search=Ghana - the slug is
+  // "ghana-music", NOT "ghana" (that would 404).
+  wpCategorySlug: "ghana-music",
   downloadLinkStyle: "download-attr",
 };
 
@@ -69,5 +78,6 @@ export const KENYA_SOURCE: GospelSourceConfig = {
   name: "CitiMuzik Kenya",
   sourceUrl: "https://www.citimuzik.com",
   wpCategory: "Kenya",
+  wpCategorySlug: "kenya",
   downloadLinkStyle: "any-mp3-link",
 };

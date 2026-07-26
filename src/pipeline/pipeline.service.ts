@@ -27,6 +27,8 @@ interface RunTarget {
   site: SourceSiteConfig;
   artistsFile: string;
   wpCategory: string;
+  /** Slug of wpCategory on the destination site, e.g. "kenya" -> /kenya. Used to link the Genre line. */
+  wpCategorySlug: string;
   /** Publish under a different WP user/app-password than the default, if set. */
   wpCredentials?: WpCredentials;
 }
@@ -37,6 +39,7 @@ export class PipelineService {
   private readonly maxPerRun: number;
   private readonly lookbackDays: number;
   private readonly excludeLastDays: number;
+  private readonly wpUrl: string;
 
   constructor(
     private readonly config: ConfigService,
@@ -49,6 +52,46 @@ export class PipelineService {
     this.maxPerRun = Number(config.get("MAX_PER_RUN") ?? 3);
     this.lookbackDays = Number(config.get("LOOKBACK_DAYS") ?? 7);
     this.excludeLastDays = Number(config.get("EXCLUDE_LAST_DAYS") ?? 0);
+    this.wpUrl = config.getOrThrow<string>("WP_URL").replace(/\/$/, "");
+  }
+
+  /**
+   * The LLM writes a plain "<strong>Genre:</strong> X" line in the metadata
+   * block (see article.prompt.ts). Rewrite it here to link Genre to this
+   * target's category page (e.g. /kenya, /tanzania, /ghana-music) - the LLM
+   * can't be trusted to know or format the destination site's real category
+   * URLs, so this is done deterministically after generation.
+   */
+  private linkGenreToCategory(bodyHtml: string, categorySlug: string): string {
+    const categoryUrl = `${this.wpUrl}/${categorySlug}`;
+    return bodyHtml.replace(
+      /(<strong>Genre:<\/strong>\s*)([^<]+?)(\s*<br)/i,
+      (_match, prefix, genreText, suffix) =>
+        `${prefix}<a href="${categoryUrl}">${genreText.trim()}</a>${suffix}`,
+    );
+  }
+
+  /**
+   * Links the "<strong>Artist:</strong> X" metadata line to the artist's
+   * dedicated tooxclusive.com/artists/{slug}/ page when one exists (see
+   * WordpressService.findArtistPage); otherwise falls back to their tag
+   * archive page, which resolveTags guarantees exists for every published post.
+   */
+  private async linkArtistLine(
+    bodyHtml: string,
+    articleArtist: string,
+    credentials: WpCredentials | undefined,
+  ): Promise<string> {
+    const primaryArtist = articleArtist.split(/\s*(?:ft\.?|feat\.?|featuring|&|,|\bx\b)\s*/i)[0].trim();
+    const artistPage = await this.wordpress.findArtistPage(primaryArtist, credentials);
+    const artistUrl =
+      artistPage?.link ?? `${this.wpUrl}/tag/${primaryArtist.toLowerCase().replace(/[^a-z0-9]+/g, "-")}/`;
+
+    return bodyHtml.replace(
+      /(<strong>Artist:<\/strong>\s*)([^<]+?)(\s*<br)/i,
+      (_match, prefix, artistText, suffix) =>
+        `${prefix}<a href="${artistUrl}">${artistText.trim()}</a>${suffix}`,
+    );
   }
 
   /** The main country-driven target, e.g. Tanzania via djmwanga.com. */
@@ -64,6 +107,7 @@ export class PipelineService {
       },
       artistsFile: "artists.json",
       wpCategory: country.wpCategory,
+      wpCategorySlug: country.wpCategorySlug,
     };
   }
 
@@ -80,6 +124,7 @@ export class PipelineService {
       },
       artistsFile: "artists-gospel.json",
       wpCategory: GOSPEL_SOURCE.wpCategory,
+      wpCategorySlug: GOSPEL_SOURCE.wpCategorySlug,
       wpCredentials:
         gospelUser && gospelPassword ? { user: gospelUser, appPassword: gospelPassword } : undefined,
     };
@@ -98,6 +143,7 @@ export class PipelineService {
       },
       artistsFile: "artists-ghana.json",
       wpCategory: GHANA_SOURCE.wpCategory,
+      wpCategorySlug: GHANA_SOURCE.wpCategorySlug,
       wpCredentials:
         ghanaUser && ghanaPassword ? { user: ghanaUser, appPassword: ghanaPassword } : undefined,
     };
@@ -116,6 +162,7 @@ export class PipelineService {
       },
       artistsFile: "artists-kenya.json",
       wpCategory: KENYA_SOURCE.wpCategory,
+      wpCategorySlug: KENYA_SOURCE.wpCategorySlug,
       wpCredentials:
         kenyaUser && kenyaPassword ? { user: kenyaUser, appPassword: kenyaPassword } : undefined,
     };
@@ -173,6 +220,8 @@ export class PipelineService {
       this.logger.log(`Generating article for: ${post.title}`);
       try {
         const article = await this.generator.generateArticle(post);
+        article.bodyHtml = this.linkGenreToCategory(article.bodyHtml, target.wpCategorySlug);
+        article.bodyHtml = await this.linkArtistLine(article.bodyHtml, article.artist, target.wpCredentials);
 
         const existing = await this.wordpress.findExistingPost(
           article.artist,
