@@ -348,12 +348,23 @@ export class WordpressService {
     );
   }
 
-  /** Fetches a single post's content by ID. Used by the freshness-refresh cron. */
-  async getPostContent(postId: number): Promise<{ id: number; link: string; content: string }> {
-    const post = await this.request<{ id: number; link: string; content: { rendered: string } }>(
-      `/posts/${postId}?_fields=id,link,content`,
-    );
-    return { id: post.id, link: post.link, content: post.content.rendered };
+  /** Fetches a single post's content and author ID. Used by the freshness-refresh cron. */
+  async getPostContent(
+    postId: number,
+  ): Promise<{ id: number; link: string; content: string; author: number }> {
+    const post = await this.request<{
+      id: number;
+      link: string;
+      content: { rendered: string };
+      author: number;
+    }>(`/posts/${postId}?_fields=id,link,content,author`);
+    return { id: post.id, link: post.link, content: post.content.rendered, author: post.author };
+  }
+
+  /** Resolves a WP user ID to their display name. Used by the freshness-refresh cron for the byline. */
+  async getUserName(userId: number): Promise<string> {
+    const user = await this.request<{ name: string }>(`/users/${userId}`);
+    return user.name;
   }
 
   async publishArticle(

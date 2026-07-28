@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { WordpressService } from "../publish/wordpress.service";
 
 /**
- * Real (not faked) freshness refresh: appends/updates a "Last updated: {date}"
- * line at the bottom of eligible posts, so post_modified only ever changes as
+ * Real (not faked) freshness refresh: appends/updates a "by {author} — {date}"
+ * line at the top of eligible posts, so post_modified only ever changes as
  * a genuine side effect of a real, visible content edit - never set directly.
+ * The author name is the post's own real author (never changed); only the
+ * date updates, to the day of the actual refresh.
  *
  * Scope: posts with id >= MIN_POST_ID in CATEGORIES. Filtered by ID, not
  * date - a mass post_date-rewrite incident gave thousands of old posts fake
@@ -47,10 +49,11 @@ const CATEGORY_SLUGS = [
 ];
 const REFRESH_INTERVAL_DAYS = 2.5;
 const DAY_GROUPS = 3;
-// Matches a marker anywhere in the body (start, middle, or end) so an old
-// bottom-placed marker (from before this was moved to the top) gets cleaned
-// up rather than left behind as a duplicate.
-const LAST_UPDATED_ANYWHERE_REGEX = /\s*<p><em>Last updated:\s*[^<]+<\/em><\/p>\s*/gi;
+// Matches this marker anywhere in the body (start, middle, or end) so an old
+// placement/format (e.g. the earlier bottom-placed "Last updated: {date}"
+// version) gets cleaned up rather than left behind as a duplicate.
+const BYLINE_MARKER_ANYWHERE_REGEX =
+  /\s*<p><em>(?:Last updated:|by\s)[^<]*<\/em><\/p>\s*/gi;
 
 interface FreshnessState {
   /** Post ID -> ISO timestamp this service last refreshed it (or indexed it, if never refreshed). */
@@ -78,20 +81,30 @@ function todaysDayGroup(): number {
 export class FreshnessService {
   private readonly logger = new Logger(FreshnessService.name);
   private readonly categoryIds: Map<string, number> = new Map();
+  private readonly authorNames: Map<number, string> = new Map();
   private readonly stateFile = join(process.cwd(), "freshness-state.json");
 
   constructor(private readonly wordpress: WordpressService) {}
 
+  private async resolveAuthorName(authorId: number): Promise<string> {
+    if (!this.authorNames.has(authorId)) {
+      const name = await this.wordpress.getUserName(authorId);
+      this.authorNames.set(authorId, name);
+    }
+    return this.authorNames.get(authorId)!;
+  }
+
   /**
-   * Applies the "Last updated" marker at the TOP of bodyHtml. Strips any
-   * existing marker anywhere first (so an old bottom-placed one from before
-   * this moved to the top doesn't linger as a duplicate), then prepends a
-   * fresh one.
+   * Applies the "by {author} — {date}" marker at the TOP of bodyHtml. Strips
+   * any existing marker anywhere first (so an old placement/format doesn't
+   * linger as a duplicate), then prepends a fresh one. The author is the
+   * post's own real author (never altered) - only the date changes, to the
+   * day of this refresh.
    */
-  refreshContent(bodyHtml: string): { content: string; changed: boolean } {
+  refreshContent(bodyHtml: string, authorName: string): { content: string; changed: boolean } {
     const today = formatDate(new Date());
-    const marker = `<p><em>Last updated: ${today}</em></p>\n`;
-    const withoutOldMarkers = bodyHtml.replace(LAST_UPDATED_ANYWHERE_REGEX, "\n").trim();
+    const marker = `<p><em>by ${authorName} — ${today}</em></p>\n`;
+    const withoutOldMarkers = bodyHtml.replace(BYLINE_MARKER_ANYWHERE_REGEX, "\n").trim();
     const updated = `${marker}${withoutOldMarkers}`;
     return { content: updated, changed: updated !== bodyHtml };
   }
@@ -201,7 +214,8 @@ export class FreshnessService {
       let content: string;
       try {
         const post = await this.wordpress.getPostContent(postId);
-        const result = this.refreshContent(post.content);
+        const authorName = await this.resolveAuthorName(post.author);
+        const result = this.refreshContent(post.content, authorName);
         if (!result.changed) continue;
         content = result.content;
       } catch (err) {
