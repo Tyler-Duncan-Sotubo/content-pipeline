@@ -47,7 +47,10 @@ const CATEGORY_SLUGS = [
 ];
 const REFRESH_INTERVAL_DAYS = 2.5;
 const DAY_GROUPS = 3;
-const LAST_UPDATED_REGEX = /<p><em>Last updated:\s*[^<]+<\/em><\/p>\s*$/i;
+// Matches a marker anywhere in the body (start, middle, or end) so an old
+// bottom-placed marker (from before this was moved to the top) gets cleaned
+// up rather than left behind as a duplicate.
+const LAST_UPDATED_ANYWHERE_REGEX = /\s*<p><em>Last updated:\s*[^<]+<\/em><\/p>\s*/gi;
 
 interface FreshnessState {
   /** Post ID -> ISO timestamp this service last refreshed it (or indexed it, if never refreshed). */
@@ -79,16 +82,18 @@ export class FreshnessService {
 
   constructor(private readonly wordpress: WordpressService) {}
 
-  /** Applies the "Last updated" marker to bodyHtml - replaces if present, appends if not. */
+  /**
+   * Applies the "Last updated" marker at the TOP of bodyHtml. Strips any
+   * existing marker anywhere first (so an old bottom-placed one from before
+   * this moved to the top doesn't linger as a duplicate), then prepends a
+   * fresh one.
+   */
   refreshContent(bodyHtml: string): { content: string; changed: boolean } {
     const today = formatDate(new Date());
-    const marker = `<p><em>Last updated: ${today}</em></p>`;
-
-    if (LAST_UPDATED_REGEX.test(bodyHtml)) {
-      const updated = bodyHtml.replace(LAST_UPDATED_REGEX, marker);
-      return { content: updated, changed: updated !== bodyHtml };
-    }
-    return { content: `${bodyHtml.trimEnd()}\n${marker}`, changed: true };
+    const marker = `<p><em>Last updated: ${today}</em></p>\n`;
+    const withoutOldMarkers = bodyHtml.replace(LAST_UPDATED_ANYWHERE_REGEX, "\n").trim();
+    const updated = `${marker}${withoutOldMarkers}`;
+    return { content: updated, changed: updated !== bodyHtml };
   }
 
   private loadState(): FreshnessState {
