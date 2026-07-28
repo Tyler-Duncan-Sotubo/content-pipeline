@@ -49,11 +49,12 @@ const CATEGORY_SLUGS = [
 ];
 const REFRESH_INTERVAL_DAYS = 2.5;
 const DAY_GROUPS = 3;
-// Matches this marker anywhere in the body (start, middle, or end) so an old
-// placement/format (e.g. the earlier bottom-placed "Last updated: {date}"
-// version) gets cleaned up rather than left behind as a duplicate.
+// Matches every marker format this service has ever written, anywhere in the
+// body (start, middle, or end) - old bottom-placed "Last updated: {date}",
+// the plain "by {author} — {date}" version, and the current styled/linked
+// version - so switching formats never leaves a duplicate behind.
 const BYLINE_MARKER_ANYWHERE_REGEX =
-  /\s*<p><em>(?:Last updated:|by\s)[^<]*<\/em><\/p>\s*/gi;
+  /\s*<p(?:\s+style="[^"]*")?>(?:<em>)?(?:Last updated:|by\s)[\s\S]*?<\/(?:em><\/p>|p>)\s*/gi;
 
 interface FreshnessState {
   /** Post ID -> ISO timestamp this service last refreshed it (or indexed it, if never refreshed). */
@@ -81,29 +82,35 @@ function todaysDayGroup(): number {
 export class FreshnessService {
   private readonly logger = new Logger(FreshnessService.name);
   private readonly categoryIds: Map<string, number> = new Map();
-  private readonly authorNames: Map<number, string> = new Map();
+  private readonly authorInfo: Map<number, { name: string; link: string }> = new Map();
   private readonly stateFile = join(process.cwd(), "freshness-state.json");
 
   constructor(private readonly wordpress: WordpressService) {}
 
-  private async resolveAuthorName(authorId: number): Promise<string> {
-    if (!this.authorNames.has(authorId)) {
-      const name = await this.wordpress.getUserName(authorId);
-      this.authorNames.set(authorId, name);
+  private async resolveAuthorInfo(authorId: number): Promise<{ name: string; link: string }> {
+    if (!this.authorInfo.has(authorId)) {
+      const info = await this.wordpress.getUserInfo(authorId);
+      this.authorInfo.set(authorId, info);
     }
-    return this.authorNames.get(authorId)!;
+    return this.authorInfo.get(authorId)!;
   }
 
   /**
-   * Applies the "by {author} — {date}" marker at the TOP of bodyHtml. Strips
-   * any existing marker anywhere first (so an old placement/format doesn't
-   * linger as a duplicate), then prepends a fresh one. The author is the
-   * post's own real author (never altered) - only the date changes, to the
-   * day of this refresh.
+   * Applies the "by {author} — {date}" marker at the TOP of bodyHtml, author
+   * name hyperlinked to their real author archive page, styled small/grey so
+   * it reads as a subtle meta line rather than a heading. Strips any existing
+   * marker anywhere first (so an old placement/format doesn't linger as a
+   * duplicate), then prepends a fresh one. The author is the post's own real
+   * author (never altered) - only the date changes, to the day of this refresh.
    */
-  refreshContent(bodyHtml: string, authorName: string): { content: string; changed: boolean } {
+  refreshContent(
+    bodyHtml: string,
+    author: { name: string; link: string },
+  ): { content: string; changed: boolean } {
     const today = formatDate(new Date());
-    const marker = `<p><em>by ${authorName} — ${today}</em></p>\n`;
+    const marker =
+      `<p style="font-size: 0.85em; color: #777;">by ` +
+      `<a href="${author.link}" style="color: #777;">${author.name}</a> — ${today}</p>\n`;
     const withoutOldMarkers = bodyHtml.replace(BYLINE_MARKER_ANYWHERE_REGEX, "\n").trim();
     const updated = `${marker}${withoutOldMarkers}`;
     return { content: updated, changed: updated !== bodyHtml };
@@ -214,8 +221,8 @@ export class FreshnessService {
       let content: string;
       try {
         const post = await this.wordpress.getPostContent(postId);
-        const authorName = await this.resolveAuthorName(post.author);
-        const result = this.refreshContent(post.content, authorName);
+        const author = await this.resolveAuthorInfo(post.author);
+        const result = this.refreshContent(post.content, author);
         if (!result.changed) continue;
         content = result.content;
       } catch (err) {

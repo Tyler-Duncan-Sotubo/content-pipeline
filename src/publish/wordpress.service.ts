@@ -361,10 +361,10 @@ export class WordpressService {
     return { id: post.id, link: post.link, content: post.content.rendered, author: post.author };
   }
 
-  /** Resolves a WP user ID to their display name. Used by the freshness-refresh cron for the byline. */
-  async getUserName(userId: number): Promise<string> {
-    const user = await this.request<{ name: string }>(`/users/${userId}`);
-    return user.name;
+  /** Resolves a WP user ID to their display name + author archive URL. Used by the freshness-refresh cron for the byline. */
+  async getUserInfo(userId: number): Promise<{ name: string; link: string }> {
+    const user = await this.request<{ name: string; link: string }>(`/users/${userId}`);
+    return { name: user.name, link: user.link };
   }
 
   async publishArticle(
