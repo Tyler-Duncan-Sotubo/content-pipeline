@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WordpressService } from "../publish/wordpress.service";
@@ -10,14 +11,22 @@ import { WordpressService } from "../publish/wordpress.service";
  * The author name is the post's own real author (never changed); only the
  * date updates, to the day of the actual refresh.
  *
- * Scope: posts with id >= MIN_POST_ID in CATEGORIES. Filtered by ID, not
- * date - a mass post_date-rewrite incident gave thousands of old posts fake
- * recent `date` values, interleaved second-by-second with genuinely new
- * posts, continuously through at least March 2026 (confirmed live: no clean
- * date cutoff exists). Post ID is monotonically real and can't be faked
- * without creating an actual new post, so it's used as the recency filter
- * instead. MIN_POST_ID (615731) is the lowest ID confirmed live to appear
- * only from April 1, 2026 onward with zero old-post contamination.
+ * Scope: posts with id >= minPostId (FRESHNESS_MIN_POST_ID env var, default
+ * 615731) in CATEGORIES. Filtered by ID, not date - a mass post_date-rewrite
+ * incident gave thousands of old posts fake recent `date` values, interleaved
+ * second-by-second with genuinely new posts, continuously through at least
+ * March 2026 (confirmed live: no clean date cutoff exists). Post ID is
+ * monotonically real and can't be faked without creating an actual new post,
+ * so it's used as the recency filter instead. The default (615731) is the
+ * lowest ID confirmed live to appear only from April 1, 2026 onward with zero
+ * old-post contamination.
+ *
+ * IMPORTANT if you change FRESHNESS_MIN_POST_ID (e.g. to move the cutoff back
+ * to January 1): pick a new value carefully. Contamination was NOT a clean
+ * date range - old and new post IDs were interleaved second-by-second through
+ * March. Verify live (e.g. fetch a handful of posts right at your intended ID
+ * boundary and check their IDs/titles look like genuinely new content, not
+ * old reused posts) before lowering this.
  *
  * Instead of re-scanning every category on every cron run (wasted API calls
  * re-checking posts that aren't due yet), eligible post IDs are indexed once
@@ -31,11 +40,11 @@ import { WordpressService } from "../publish/wordpress.service";
  * post ID (id % 3), so on any given day only ~1/3 of the pool is even
  * eligible - this spreads refreshes into a ~3-day cycle per post rather than
  * refreshing everything daily (much lower load, less mechanical-looking).
- * REFRESH_INTERVAL_DAYS (2.5) is intentionally non-integer/jittered relative
- * to the 3-day group cycle so the exact refresh timing isn't perfectly
- * regular per post.
+ * The refresh interval (default 2.5 days, configurable via
+ * FRESHNESS_REFRESH_INTERVAL_DAYS) is intentionally non-integer/jittered
+ * relative to the 3-day group cycle so the exact refresh timing isn't
+ * perfectly regular per post.
  */
-const MIN_POST_ID = 615731;
 const CATEGORY_SLUGS = [
   "download-mp3",
   "south-africa",
@@ -47,8 +56,6 @@ const CATEGORY_SLUGS = [
   "zambia",
   "united-kingdom",
 ];
-const REFRESH_INTERVAL_DAYS = 2.5;
-const DAY_GROUPS = 3;
 // Matches every marker format this service has ever written, anywhere in the
 // body (start, middle, or end) - old bottom-placed "Last updated: {date}",
 // the plain "by {author} — {date}" version, and the current styled/linked
@@ -66,26 +73,36 @@ function formatDate(d: Date): string {
   return d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 }
 
-function dayGroupForPostId(postId: number): number {
-  return postId % DAY_GROUPS;
-}
-
-function todaysDayGroup(): number {
-  // Days since a fixed epoch, mod DAY_GROUPS - stable across process restarts,
-  // rotates which group is "due" each calendar day.
-  const epoch = new Date("2026-01-01T00:00:00Z").getTime();
-  const daysSinceEpoch = Math.floor((Date.now() - epoch) / (24 * 60 * 60 * 1000));
-  return daysSinceEpoch % DAY_GROUPS;
-}
-
 @Injectable()
 export class FreshnessService {
   private readonly logger = new Logger(FreshnessService.name);
   private readonly categoryIds: Map<string, number> = new Map();
   private readonly authorInfo: Map<number, { name: string; link: string }> = new Map();
   private readonly stateFile = join(process.cwd(), "freshness-state.json");
+  private readonly refreshIntervalDays: number;
+  private readonly dayGroups: number;
+  private readonly minPostId: number;
 
-  constructor(private readonly wordpress: WordpressService) {}
+  constructor(
+    private readonly wordpress: WordpressService,
+    config: ConfigService,
+  ) {
+    this.refreshIntervalDays = Number(config.get("FRESHNESS_REFRESH_INTERVAL_DAYS") ?? 2.5);
+    this.dayGroups = Number(config.get("FRESHNESS_DAY_GROUPS") ?? 3);
+    this.minPostId = Number(config.get("FRESHNESS_MIN_POST_ID") ?? 615731);
+  }
+
+  private dayGroupForPostId(postId: number): number {
+    return postId % this.dayGroups;
+  }
+
+  private todaysDayGroup(): number {
+    // Days since a fixed epoch, mod dayGroups - stable across process
+    // restarts, rotates which group is "due" each calendar day.
+    const epoch = new Date("2026-01-01T00:00:00Z").getTime();
+    const daysSinceEpoch = Math.floor((Date.now() - epoch) / (24 * 60 * 60 * 1000));
+    return daysSinceEpoch % this.dayGroups;
+  }
 
   private async resolveAuthorInfo(authorId: number): Promise<{ name: string; link: string }> {
     if (!this.authorInfo.has(authorId)) {
@@ -142,7 +159,7 @@ export class FreshnessService {
 
   /**
    * Walks all in-scope categories once and (re)builds freshness-state.json
-   * with every eligible post ID (id >= MIN_POST_ID). Existing entries keep
+   * with every eligible post ID (id >= minPostId). Existing entries keep
    * their last-refreshed timestamp; only newly-discovered posts get added
    * with the current time (so a fresh post isn't immediately "overdue").
    * Should be run periodically (e.g. weekly), not on every cron tick.
@@ -166,7 +183,7 @@ export class FreshnessService {
 
         let reachedOldPosts = false;
         for (const post of posts) {
-          if (post.id < MIN_POST_ID) {
+          if (post.id < this.minPostId) {
             reachedOldPosts = true;
             break;
           }
@@ -190,7 +207,7 @@ export class FreshnessService {
 
   private isDue(lastRefreshedIso: string): boolean {
     const lastTouched = new Date(lastRefreshedIso).getTime();
-    const intervalMs = REFRESH_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
+    const intervalMs = this.refreshIntervalDays * 24 * 60 * 60 * 1000;
     return Date.now() - lastTouched >= intervalMs;
   }
 
@@ -205,14 +222,14 @@ export class FreshnessService {
     dryRun = false,
   ): Promise<{ scanned: number; refreshed: number; failed: number }> {
     const state = this.loadState();
-    const todayGroup = todaysDayGroup();
+    const todayGroup = this.todaysDayGroup();
     let scanned = 0;
     let refreshed = 0;
     let failed = 0;
 
     const candidateIds = Object.keys(state.posts)
       .map(Number)
-      .filter((id) => dayGroupForPostId(id) === todayGroup && this.isDue(state.posts[String(id)]));
+      .filter((id) => this.dayGroupForPostId(id) === todayGroup && this.isDue(state.posts[String(id)]));
 
     for (const postId of candidateIds) {
       if (refreshed >= limit) break;

@@ -39,6 +39,18 @@ export const envSchema = z
     EXCLUDE_LAST_DAYS: z.coerce.number().int().min(0).default(0),
     MAX_PER_RUN: z.coerce.number().int().min(1).default(3),
 
+    // How often (in days) each post's freshness byline is eligible to be
+    // refreshed - e.g. 2.5 means roughly every ~2.5 days per post.
+    FRESHNESS_REFRESH_INTERVAL_DAYS: z.coerce.number().positive().default(2.5),
+    // How many rotating day-groups posts are split into (id % N) - only
+    // ~1/N of the pool is eligible on any given day. Default 3 = ~3-day cycle.
+    FRESHNESS_DAY_GROUPS: z.coerce.number().int().min(1).default(3),
+    // Lowest post ID eligible for freshness refresh - see freshness.service.ts
+    // for why this is ID-based, not date-based. Only lower this after
+    // verifying live that posts at your intended ID boundary are genuinely
+    // new content, not old contaminated posts (see comment in that file).
+    FRESHNESS_MIN_POST_ID: z.coerce.number().int().min(0).default(615731),
+
     // Logging - Better Stack (Logtail) in production; pretty console in dev.
     // Leave LOGTAIL_* unset to log to console only.
     LOG_LEVEL: z.string().optional(),
