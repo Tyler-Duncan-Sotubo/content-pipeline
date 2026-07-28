@@ -262,6 +262,14 @@ export class WordpressService {
     return this.resolveCategory(name, credentials);
   }
 
+  /** Resolves a category by its exact slug (not name) - used by the freshness cron. */
+  async resolveCategoryIdBySlug(slug: string): Promise<number | undefined> {
+    const found = await this.request<{ id: number; slug: string }[]>(
+      `/categories?slug=${encodeURIComponent(slug)}`,
+    );
+    return found.find((c) => c.slug === slug)?.id;
+  }
+
   /** Resolve tag names to IDs without unioning in any extra artist name. Used by the backfill script. */
   resolveTagsOnly(names: string[], credentials?: WpCredentials): Promise<number[]> {
     return this.resolveTerms("/tags", this.splitArtistTags(names), credentials);
@@ -315,6 +323,37 @@ export class WordpressService {
       method: "POST",
       body: JSON.stringify(params),
     });
+  }
+
+  /**
+   * Fetches posts in a category, newest-ID-first, with date/modified fields
+   * included. Used by the freshness-refresh cron to find posts due for their
+   * periodic "Last updated" line refresh.
+   *
+   * Deliberately ordered/filtered by ID, not by the `date` field - a mass
+   * post_date-rewrite incident (confirmed live: thousands of old posts across
+   * Jan-Mar 2026 have fake recent `date` values, interleaved second-by-second
+   * with genuinely new posts) makes `date` unreliable as a recency filter.
+   * Post ID is monotonically real - it can't be faked without actually
+   * creating a new post - so callers should filter on `id >= minId` instead.
+   */
+  async listPostsByCategoryNewestFirst(
+    categoryId: number,
+    page: number,
+    perPage = 100,
+  ): Promise<{ id: number; link: string; date: string; modified: string; content: { rendered: string } }[]> {
+    return this.request(
+      `/posts?categories=${categoryId}&page=${page}&per_page=${perPage}` +
+        `&orderby=id&order=desc&_fields=id,link,date,modified,content`,
+    );
+  }
+
+  /** Fetches a single post's content by ID. Used by the freshness-refresh cron. */
+  async getPostContent(postId: number): Promise<{ id: number; link: string; content: string }> {
+    const post = await this.request<{ id: number; link: string; content: { rendered: string } }>(
+      `/posts/${postId}?_fields=id,link,content`,
+    );
+    return { id: post.id, link: post.link, content: post.content.rendered };
   }
 
   async publishArticle(

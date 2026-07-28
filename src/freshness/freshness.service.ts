@@ -1,0 +1,230 @@
+import { Injectable, Logger } from "@nestjs/common";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { WordpressService } from "../publish/wordpress.service";
+
+/**
+ * Real (not faked) freshness refresh: appends/updates a "Last updated: {date}"
+ * line at the bottom of eligible posts, so post_modified only ever changes as
+ * a genuine side effect of a real, visible content edit - never set directly.
+ *
+ * Scope: posts with id >= MIN_POST_ID in CATEGORIES. Filtered by ID, not
+ * date - a mass post_date-rewrite incident gave thousands of old posts fake
+ * recent `date` values, interleaved second-by-second with genuinely new
+ * posts, continuously through at least March 2026 (confirmed live: no clean
+ * date cutoff exists). Post ID is monotonically real and can't be faked
+ * without creating an actual new post, so it's used as the recency filter
+ * instead. MIN_POST_ID (615731) is the lowest ID confirmed live to appear
+ * only from April 1, 2026 onward with zero old-post contamination.
+ *
+ * Instead of re-scanning every category on every cron run (wasted API calls
+ * re-checking posts that aren't due yet), eligible post IDs are indexed once
+ * into freshness-state.json and reused - each cron run just reads that file
+ * and filters in memory, only hitting the WP API for posts it actually
+ * patches. buildIndex() (re)builds the file and should run periodically
+ * (e.g. weekly) to pick up newly published posts; runPass() is the frequent
+ * (every-2-hours) job that does the actual refreshing.
+ *
+ * Rotation: each post is deterministically assigned to 1 of 3 day-groups by
+ * post ID (id % 3), so on any given day only ~1/3 of the pool is even
+ * eligible - this spreads refreshes into a ~3-day cycle per post rather than
+ * refreshing everything daily (much lower load, less mechanical-looking).
+ * REFRESH_INTERVAL_DAYS (2.5) is intentionally non-integer/jittered relative
+ * to the 3-day group cycle so the exact refresh timing isn't perfectly
+ * regular per post.
+ */
+const MIN_POST_ID = 615731;
+const CATEGORY_SLUGS = [
+  "download-mp3",
+  "south-africa",
+  "congo",
+  "kenya",
+  "lyrics",
+  "tanzania",
+  "ghana-music",
+  "zambia",
+  "united-kingdom",
+];
+const REFRESH_INTERVAL_DAYS = 2.5;
+const DAY_GROUPS = 3;
+const LAST_UPDATED_REGEX = /<p><em>Last updated:\s*[^<]+<\/em><\/p>\s*$/i;
+
+interface FreshnessState {
+  /** Post ID -> ISO timestamp this service last refreshed it (or indexed it, if never refreshed). */
+  posts: Record<string, string>;
+  indexBuiltAt?: string;
+}
+
+function formatDate(d: Date): string {
+  return d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+}
+
+function dayGroupForPostId(postId: number): number {
+  return postId % DAY_GROUPS;
+}
+
+function todaysDayGroup(): number {
+  // Days since a fixed epoch, mod DAY_GROUPS - stable across process restarts,
+  // rotates which group is "due" each calendar day.
+  const epoch = new Date("2026-01-01T00:00:00Z").getTime();
+  const daysSinceEpoch = Math.floor((Date.now() - epoch) / (24 * 60 * 60 * 1000));
+  return daysSinceEpoch % DAY_GROUPS;
+}
+
+@Injectable()
+export class FreshnessService {
+  private readonly logger = new Logger(FreshnessService.name);
+  private readonly categoryIds: Map<string, number> = new Map();
+  private readonly stateFile = join(process.cwd(), "freshness-state.json");
+
+  constructor(private readonly wordpress: WordpressService) {}
+
+  /** Applies the "Last updated" marker to bodyHtml - replaces if present, appends if not. */
+  refreshContent(bodyHtml: string): { content: string; changed: boolean } {
+    const today = formatDate(new Date());
+    const marker = `<p><em>Last updated: ${today}</em></p>`;
+
+    if (LAST_UPDATED_REGEX.test(bodyHtml)) {
+      const updated = bodyHtml.replace(LAST_UPDATED_REGEX, marker);
+      return { content: updated, changed: updated !== bodyHtml };
+    }
+    return { content: `${bodyHtml.trimEnd()}\n${marker}`, changed: true };
+  }
+
+  private loadState(): FreshnessState {
+    if (!existsSync(this.stateFile)) return { posts: {} };
+    return JSON.parse(readFileSync(this.stateFile, "utf8")) as FreshnessState;
+  }
+
+  private saveState(state: FreshnessState): void {
+    writeFileSync(this.stateFile, JSON.stringify(state, null, 2));
+  }
+
+  private async resolveCategoryIds(): Promise<number[]> {
+    const ids: number[] = [];
+    for (const slug of CATEGORY_SLUGS) {
+      if (!this.categoryIds.has(slug)) {
+        // resolveCategoryId matches by NAME, not slug - categories here are
+        // looked up by slug directly via a raw request instead.
+        const id = await this.wordpress.resolveCategoryIdBySlug(slug);
+        if (id) this.categoryIds.set(slug, id);
+      }
+      const id = this.categoryIds.get(slug);
+      if (id) ids.push(id);
+    }
+    return [...new Set(ids)];
+  }
+
+  /**
+   * Walks all in-scope categories once and (re)builds freshness-state.json
+   * with every eligible post ID (id >= MIN_POST_ID). Existing entries keep
+   * their last-refreshed timestamp; only newly-discovered posts get added
+   * with the current time (so a fresh post isn't immediately "overdue").
+   * Should be run periodically (e.g. weekly), not on every cron tick.
+   */
+  async buildIndex(): Promise<{ totalIndexed: number; newlyAdded: number }> {
+    const state = this.loadState();
+    const categoryIds = await this.resolveCategoryIds();
+    let newlyAdded = 0;
+
+    for (const categoryId of categoryIds) {
+      let page = 1;
+      for (;;) {
+        let posts;
+        try {
+          posts = await this.wordpress.listPostsByCategoryNewestFirst(categoryId, page, 100);
+        } catch (err) {
+          if ((err as Error).message.includes("400")) break;
+          throw err;
+        }
+        if (posts.length === 0) break;
+
+        let reachedOldPosts = false;
+        for (const post of posts) {
+          if (post.id < MIN_POST_ID) {
+            reachedOldPosts = true;
+            break;
+          }
+          const key = String(post.id);
+          if (!(key in state.posts)) {
+            state.posts[key] = new Date().toISOString();
+            newlyAdded++;
+          }
+        }
+        if (reachedOldPosts) break;
+        page++;
+      }
+    }
+
+    state.indexBuiltAt = new Date().toISOString();
+    this.saveState(state);
+    const totalIndexed = Object.keys(state.posts).length;
+    this.logger.log(`Index built: ${totalIndexed} total posts indexed, ${newlyAdded} newly added`);
+    return { totalIndexed, newlyAdded };
+  }
+
+  private isDue(lastRefreshedIso: string): boolean {
+    const lastTouched = new Date(lastRefreshedIso).getTime();
+    const intervalMs = REFRESH_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
+    return Date.now() - lastTouched >= intervalMs;
+  }
+
+  /**
+   * Runs one refresh pass over the stored index: finds posts in today's due
+   * day-group that are overdue, refreshes up to `limit` of them via the API.
+   * With dryRun, logs what would be refreshed but writes nothing (state file
+   * is also left untouched on dry-run).
+   */
+  async runPass(
+    limit = 150,
+    dryRun = false,
+  ): Promise<{ scanned: number; refreshed: number; failed: number }> {
+    const state = this.loadState();
+    const todayGroup = todaysDayGroup();
+    let scanned = 0;
+    let refreshed = 0;
+    let failed = 0;
+
+    const candidateIds = Object.keys(state.posts)
+      .map(Number)
+      .filter((id) => dayGroupForPostId(id) === todayGroup && this.isDue(state.posts[String(id)]));
+
+    for (const postId of candidateIds) {
+      if (refreshed >= limit) break;
+      scanned++;
+
+      let content: string;
+      try {
+        const post = await this.wordpress.getPostContent(postId);
+        const result = this.refreshContent(post.content);
+        if (!result.changed) continue;
+        content = result.content;
+      } catch (err) {
+        failed++;
+        this.logger.warn(`Failed to fetch post ${postId}: ${(err as Error).message}`);
+        continue;
+      }
+
+      if (dryRun) {
+        refreshed++;
+        this.logger.log(`[dry-run] Would refresh post ${postId}`);
+        continue;
+      }
+
+      try {
+        await this.wordpress.patchPost(postId, { content });
+        state.posts[String(postId)] = new Date().toISOString();
+        refreshed++;
+        this.logger.log(`Refreshed post ${postId}`);
+      } catch (err) {
+        failed++;
+        this.logger.warn(`Failed to refresh post ${postId}: ${(err as Error).message}`);
+      }
+    }
+
+    if (!dryRun) this.saveState(state);
+
+    this.logger.log(`Freshness pass done: scanned ${scanned}, refreshed ${refreshed}, failed ${failed}`);
+    return { scanned, refreshed, failed };
+  }
+}

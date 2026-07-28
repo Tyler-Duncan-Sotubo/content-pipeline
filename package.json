@@ -12,6 +12,7 @@
     "pipeline:kenya": "ts-node src/cli-kenya.ts",
     "backfill:tags": "ts-node src/backfill-tags-links.ts",
     "build:artist-pages": "ts-node src/build-artist-pages.ts",
+    "freshness": "ts-node src/cli-freshness.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
