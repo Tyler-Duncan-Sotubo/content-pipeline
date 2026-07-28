@@ -110,7 +110,7 @@ export class FreshnessService {
     const today = formatDate(new Date());
     const marker =
       `<p style="font-size: 0.85em; color: #777;">by ` +
-      `<a href="${author.link}" style="color: #777;">${author.name}</a> — ${today}</p>\n`;
+      `<a href="${author.link}" style="color: #d32f2f;">${author.name}</a> — ${today}</p>\n`;
     const withoutOldMarkers = bodyHtml.replace(BYLINE_MARKER_ANYWHERE_REGEX, "\n").trim();
     const updated = `${marker}${withoutOldMarkers}`;
     return { content: updated, changed: updated !== bodyHtml };
