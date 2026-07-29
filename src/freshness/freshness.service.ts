@@ -32,18 +32,14 @@ import { WordpressService } from "../publish/wordpress.service";
  * re-checking posts that aren't due yet), eligible post IDs are indexed once
  * into freshness-state.json and reused - each cron run just reads that file
  * and filters in memory, only hitting the WP API for posts it actually
- * patches. buildIndex() (re)builds the file and should run periodically
- * (e.g. weekly) to pick up newly published posts; runPass() is the frequent
- * (every-2-hours) job that does the actual refreshing.
+ * patches. buildIndex() (re)builds the file daily to pick up newly published
+ * posts; runPass() is the hourly job that does the actual refreshing.
  *
- * Rotation: each post is deterministically assigned to 1 of 3 day-groups by
- * post ID (id % 3), so on any given day only ~1/3 of the pool is even
- * eligible - this spreads refreshes into a ~3-day cycle per post rather than
- * refreshing everything daily (much lower load, less mechanical-looking).
- * The refresh interval (default 2.5 days, configurable via
- * FRESHNESS_REFRESH_INTERVAL_DAYS) is intentionally non-integer/jittered
- * relative to the 3-day group cycle so the exact refresh timing isn't
- * perfectly regular per post.
+ * No day-grouping: every post overdue (per FRESHNESS_REFRESH_INTERVAL_DAYS,
+ * default 2.5 days since its last refresh) is a candidate on every run, up
+ * to the per-run cap - there's no artificial 1-of-N-days rotation. At the
+ * current pool size and hourly cadence, the whole catalog can be refreshed
+ * roughly once per interval rather than staggered across several days.
  */
 const CATEGORY_SLUGS = [
   "download-mp3",
@@ -80,7 +76,6 @@ export class FreshnessService implements OnApplicationBootstrap {
   private readonly authorInfo: Map<number, { name: string; link: string }> = new Map();
   private readonly stateFile = join(process.cwd(), "freshness-state.json");
   private readonly refreshIntervalDays: number;
-  private readonly dayGroups: number;
   private readonly minPostId: number;
 
   constructor(
@@ -88,7 +83,6 @@ export class FreshnessService implements OnApplicationBootstrap {
     config: ConfigService,
   ) {
     this.refreshIntervalDays = Number(config.get("FRESHNESS_REFRESH_INTERVAL_DAYS") ?? 2.5);
-    this.dayGroups = Number(config.get("FRESHNESS_DAY_GROUPS") ?? 3);
     this.minPostId = Number(config.get("FRESHNESS_MIN_POST_ID") ?? 615731);
   }
 
@@ -111,18 +105,6 @@ export class FreshnessService implements OnApplicationBootstrap {
     this.buildIndex().catch((err) => {
       this.logger.error(`Startup index auto-build failed: ${(err as Error).message}`);
     });
-  }
-
-  private dayGroupForPostId(postId: number): number {
-    return postId % this.dayGroups;
-  }
-
-  private todaysDayGroup(): number {
-    // Days since a fixed epoch, mod dayGroups - stable across process
-    // restarts, rotates which group is "due" each calendar day.
-    const epoch = new Date("2026-01-01T00:00:00Z").getTime();
-    const daysSinceEpoch = Math.floor((Date.now() - epoch) / (24 * 60 * 60 * 1000));
-    return daysSinceEpoch % this.dayGroups;
   }
 
   private async resolveAuthorInfo(authorId: number): Promise<{ name: string; link: string }> {
@@ -207,10 +189,8 @@ export class FreshnessService implements OnApplicationBootstrap {
    * with "now", which would make a fresh index refresh nothing for a full
    * interval - confirmed in production: index built, but the very next
    * refresh pass 12 minutes later found 0 due, since nothing had had 2.5
-   * days to elapse yet). The day-group gate still spreads these first
-   * refreshes across ~dayGroups days rather than all at once. Should be run
-   * periodically (e.g. weekly) to also pick up genuinely new posts, which
-   * get this same immediate-eligibility treatment.
+   * days to elapse yet). Runs daily to also pick up genuinely new posts,
+   * which get this same immediate-eligibility treatment.
    */
   async buildIndex(): Promise<{ totalIndexed: number; newlyAdded: number }> {
     // Read once up front just to know which IDs are ALREADY present (so we
@@ -313,17 +293,17 @@ export class FreshnessService implements OnApplicationBootstrap {
   }
 
   /**
-   * Runs one refresh pass over the stored index: finds posts in today's due
-   * day-group that are overdue, refreshes up to `limit` of them via the API.
-   * With dryRun, logs what would be refreshed but writes nothing (state file
-   * is also left untouched on dry-run).
+   * Runs one refresh pass over the stored index: finds all posts that are
+   * overdue (no day-group gating - every eligible post rolls every run),
+   * refreshes up to `limit` of them via the API. With dryRun, logs what
+   * would be refreshed but writes nothing (state file is also left
+   * untouched on dry-run).
    */
   async runPass(
     limit = 150,
     dryRun = false,
   ): Promise<{ scanned: number; refreshed: number; failed: number }> {
     const state = this.loadState();
-    const todayGroup = this.todaysDayGroup();
     let scanned = 0;
     let refreshed = 0;
     let failed = 0;
@@ -331,7 +311,7 @@ export class FreshnessService implements OnApplicationBootstrap {
 
     const candidateIds = Object.keys(state.posts)
       .map(Number)
-      .filter((id) => this.dayGroupForPostId(id) === todayGroup && this.isDue(state.posts[String(id)]));
+      .filter((id) => this.isDue(state.posts[String(id)]));
 
     for (const postId of candidateIds) {
       if (refreshed >= limit) break;

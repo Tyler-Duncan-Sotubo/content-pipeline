@@ -42,9 +42,6 @@ export const envSchema = z
     // How often (in days) each post's freshness byline is eligible to be
     // refreshed - e.g. 2.5 means roughly every ~2.5 days per post.
     FRESHNESS_REFRESH_INTERVAL_DAYS: z.coerce.number().positive().default(2.5),
-    // How many rotating day-groups posts are split into (id % N) - only
-    // ~1/N of the pool is eligible on any given day. Default 3 = ~3-day cycle.
-    FRESHNESS_DAY_GROUPS: z.coerce.number().int().min(1).default(3),
     // Lowest post ID eligible for freshness refresh - see freshness.service.ts
     // for why this is ID-based, not date-based. Only lower this after
     // verifying live that posts at your intended ID boundary are genuinely

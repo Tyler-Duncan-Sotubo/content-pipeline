@@ -5,10 +5,10 @@ import { FreshnessService } from "./freshness.service";
 /**
  * Two jobs:
  * - refresh pass: hourly, 8am-4pm WAT (9 runs/day) - reads the stored
- *   post-ID index (freshness-state.json) and only touches posts that are
- *   both in today's rotating day-group AND actually overdue (see
- *   FreshnessService), so a missed/late run doesn't skip posts: the next
- *   run just finds them still overdue and catches up.
+ *   post-ID index (freshness-state.json) and refreshes up to 60 overdue
+ *   posts per run (no day-group rotation - every overdue post is a
+ *   candidate every run). A missed run doesn't skip posts: the next run
+ *   just finds them still overdue and catches up.
  * - index rebuild: daily - re-scans categories to pick up newly published
  *   posts into the index. Bloggers publish manually every day (not just the
  *   pipeline's own automated posts), so a new post needs same-day discovery,
@@ -21,18 +21,14 @@ export class FreshnessCronService {
 
   constructor(private readonly freshness: FreshnessService) {}
 
-  // Simple hourly schedule, 8am-4pm WAT (9 runs/day) - the previous 45-min-
-  // interval, 12-entry version was harder to reason about and one slot
-  // (8:00am) silently didn't fire as expected. One cron expression, on the
-  // hour, is simpler to verify and debug. Self-healing either way: each run
-  // only touches posts that are both in today's rotating day-group AND
-  // actually overdue (see FreshnessService), so a missed run doesn't skip
-  // posts - the next run just finds them still overdue and catches up.
+  // Simple hourly schedule, 8am-4pm WAT (9 runs/day). Self-healing: each run
+  // only touches posts that are actually overdue, so a missed run doesn't
+  // skip posts - the next run just finds them still overdue and catches up.
   @Cron("0 8-16 * * *", { name: "freshness-refresh", timeZone: "Africa/Lagos" })
   async runRefresh(): Promise<void> {
     this.logger.log("Cron: starting freshness refresh pass");
     try {
-      const result = await this.freshness.runPass(150);
+      const result = await this.freshness.runPass(60);
       this.logger.log(`Cron: freshness pass done - ${JSON.stringify(result)}`);
     } catch (err) {
       this.logger.error(`Cron: freshness pass failed: ${(err as Error).message}`);
