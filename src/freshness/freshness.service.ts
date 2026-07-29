@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, OnApplicationBootstrap } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -74,7 +74,7 @@ function formatDate(d: Date): string {
 }
 
 @Injectable()
-export class FreshnessService {
+export class FreshnessService implements OnApplicationBootstrap {
   private readonly logger = new Logger(FreshnessService.name);
   private readonly categoryIds: Map<string, number> = new Map();
   private readonly authorInfo: Map<number, { name: string; link: string }> = new Map();
@@ -90,6 +90,27 @@ export class FreshnessService {
     this.refreshIntervalDays = Number(config.get("FRESHNESS_REFRESH_INTERVAL_DAYS") ?? 2.5);
     this.dayGroups = Number(config.get("FRESHNESS_DAY_GROUPS") ?? 3);
     this.minPostId = Number(config.get("FRESHNESS_MIN_POST_ID") ?? 615731);
+  }
+
+  /**
+   * Auto-builds the index on app startup if it's empty (e.g. right after a
+   * fresh deploy, or freshness-state.json was reset to {}). Without this, the
+   * refresh cron finds nothing to do until the weekly index-build cron next
+   * fires - confirmed in production: index was empty, every 2-hourly refresh
+   * pass logged "scanned: 0, refreshed: 0" with nothing to act on. Runs in
+   * the background (not awaited) so it doesn't delay app startup; errors are
+   * logged, not thrown, so a transient WP API issue can't crash boot.
+   */
+  onApplicationBootstrap(): void {
+    const state = this.loadState();
+    if (Object.keys(state.posts).length > 0) {
+      this.logger.log(`Freshness index already has ${Object.keys(state.posts).length} posts - skipping auto-build`);
+      return;
+    }
+    this.logger.log("Freshness index is empty - auto-building on startup");
+    this.buildIndex().catch((err) => {
+      this.logger.error(`Startup index auto-build failed: ${(err as Error).message}`);
+    });
   }
 
   private dayGroupForPostId(postId: number): number {
