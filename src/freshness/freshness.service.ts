@@ -181,14 +181,23 @@ export class FreshnessService implements OnApplicationBootstrap {
   /**
    * Walks all in-scope categories once and (re)builds freshness-state.json
    * with every eligible post ID (id >= minPostId). Existing entries keep
-   * their last-refreshed timestamp; only newly-discovered posts get added
-   * with the current time (so a fresh post isn't immediately "overdue").
-   * Should be run periodically (e.g. weekly), not on every cron tick.
+   * their last-refreshed timestamp; newly-discovered posts are backdated
+   * far enough in the past to be immediately eligible (rather than stamped
+   * with "now", which would make a fresh index refresh nothing for a full
+   * interval - confirmed in production: index built, but the very next
+   * refresh pass 12 minutes later found 0 due, since nothing had had 2.5
+   * days to elapse yet). The day-group gate still spreads these first
+   * refreshes across ~dayGroups days rather than all at once. Should be run
+   * periodically (e.g. weekly) to also pick up genuinely new posts, which
+   * get this same immediate-eligibility treatment.
    */
   async buildIndex(): Promise<{ totalIndexed: number; newlyAdded: number }> {
     const state = this.loadState();
     const categoryIds = await this.resolveCategoryIds();
     let newlyAdded = 0;
+    const immediatelyEligible = new Date(
+      Date.now() - (this.refreshIntervalDays + 1) * 24 * 60 * 60 * 1000,
+    ).toISOString();
 
     for (const categoryId of categoryIds) {
       let page = 1;
@@ -210,7 +219,7 @@ export class FreshnessService implements OnApplicationBootstrap {
           }
           const key = String(post.id);
           if (!(key in state.posts)) {
-            state.posts[key] = new Date().toISOString();
+            state.posts[key] = immediatelyEligible;
             newlyAdded++;
           }
         }
