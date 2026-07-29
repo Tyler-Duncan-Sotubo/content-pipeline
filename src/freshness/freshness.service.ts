@@ -163,6 +163,27 @@ export class FreshnessService implements OnApplicationBootstrap {
     writeFileSync(this.stateFile, JSON.stringify(state, null, 2));
   }
 
+  /**
+   * Merges `updates` into whatever is on disk RIGHT NOW (not a stale
+   * in-memory copy from earlier), then writes the merged result. This is
+   * what makes buildIndex()/addPosts()/runPass() safe to run concurrently
+   * (e.g. the startup auto-build racing a manually-run --add-posts command) -
+   * each only ever adds/updates its own specific post-ID entries, so neither
+   * can silently erase the other's writes. Confirmed this race was real: a
+   * CLI --add-posts run landed while the startup auto-build was still
+   * finishing in the background, and the auto-build's blind overwrite erased
+   * one of the two manually-added posts.
+   */
+  private mergeAndSaveState(updates: Record<string, string>, indexBuiltAt?: string): FreshnessState {
+    const current = this.loadState();
+    const merged: FreshnessState = {
+      posts: { ...current.posts, ...updates },
+      indexBuiltAt: indexBuiltAt ?? current.indexBuiltAt,
+    };
+    this.saveState(merged);
+    return merged;
+  }
+
   private async resolveCategoryIds(): Promise<number[]> {
     const ids: number[] = [];
     for (const slug of CATEGORY_SLUGS) {
@@ -192,9 +213,13 @@ export class FreshnessService implements OnApplicationBootstrap {
    * get this same immediate-eligibility treatment.
    */
   async buildIndex(): Promise<{ totalIndexed: number; newlyAdded: number }> {
-    const state = this.loadState();
+    // Read once up front just to know which IDs are ALREADY present (so we
+    // don't re-add them with a fresh backdated timestamp) - the actual write
+    // at the end re-reads current state via mergeAndSaveState, so a
+    // concurrent addPosts()/runPass() write in between can't be lost.
+    const existingKeys = new Set(Object.keys(this.loadState().posts));
     const categoryIds = await this.resolveCategoryIds();
-    let newlyAdded = 0;
+    const updates: Record<string, string> = {};
     const immediatelyEligible = new Date(
       Date.now() - (this.refreshIntervalDays + 1) * 24 * 60 * 60 * 1000,
     ).toISOString();
@@ -218,9 +243,8 @@ export class FreshnessService implements OnApplicationBootstrap {
             break;
           }
           const key = String(post.id);
-          if (!(key in state.posts)) {
-            state.posts[key] = immediatelyEligible;
-            newlyAdded++;
+          if (!existingKeys.has(key)) {
+            updates[key] = immediatelyEligible;
           }
         }
         if (reachedOldPosts) break;
@@ -228,11 +252,58 @@ export class FreshnessService implements OnApplicationBootstrap {
       }
     }
 
-    state.indexBuiltAt = new Date().toISOString();
-    this.saveState(state);
-    const totalIndexed = Object.keys(state.posts).length;
+    const newlyAdded = Object.keys(updates).length;
+    const merged = this.mergeAndSaveState(updates, new Date().toISOString());
+    const totalIndexed = Object.keys(merged.posts).length;
     this.logger.log(`Index built: ${totalIndexed} total posts indexed, ${newlyAdded} newly added`);
     return { totalIndexed, newlyAdded };
+  }
+
+  /**
+   * Manually adds specific post IDs to the rotation - e.g. an older post
+   * below minPostId that you've personally verified isn't contaminated, or
+   * any post you want in scope regardless of the normal category/ID filters.
+   * Each ID is checked against the live API first (skipped if it doesn't
+   * exist), then added backdated so it's immediately eligible, same as a
+   * freshly-indexed post. Existing entries are left untouched (their real
+   * last-refreshed timestamp is preserved, not reset).
+   */
+  async addPosts(postIds: number[]): Promise<{ added: number; skipped: number; alreadyPresent: number }> {
+    // Same pattern as buildIndex(): only check current state to decide
+    // add-vs-skip, then merge our own updates into whatever is on disk at
+    // write time so a concurrent buildIndex()/runPass() write isn't lost.
+    const existingKeys = new Set(Object.keys(this.loadState().posts));
+    const immediatelyEligible = new Date(
+      Date.now() - (this.refreshIntervalDays + 1) * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    const updates: Record<string, string> = {};
+    let added = 0;
+    let skipped = 0;
+    let alreadyPresent = 0;
+
+    for (const postId of postIds) {
+      const key = String(postId);
+      if (existingKeys.has(key)) {
+        alreadyPresent++;
+        this.logger.log(`Post ${postId} already in rotation - skipping`);
+        continue;
+      }
+      try {
+        await this.wordpress.getPostContent(postId);
+      } catch (err) {
+        skipped++;
+        this.logger.warn(`Post ${postId} not found or unreachable - skipping: ${(err as Error).message}`);
+        continue;
+      }
+      updates[key] = immediatelyEligible;
+      added++;
+      this.logger.log(`Added post ${postId} to rotation (immediately eligible)`);
+    }
+
+    this.mergeAndSaveState(updates);
+    this.logger.log(`Manual add done: ${added} added, ${skipped} skipped, ${alreadyPresent} already present`);
+    return { added, skipped, alreadyPresent };
   }
 
   private isDue(lastRefreshedIso: string): boolean {
@@ -256,6 +327,7 @@ export class FreshnessService implements OnApplicationBootstrap {
     let scanned = 0;
     let refreshed = 0;
     let failed = 0;
+    const updates: Record<string, string> = {};
 
     const candidateIds = Object.keys(state.posts)
       .map(Number)
@@ -286,7 +358,7 @@ export class FreshnessService implements OnApplicationBootstrap {
 
       try {
         await this.wordpress.patchPost(postId, { content });
-        state.posts[String(postId)] = new Date().toISOString();
+        updates[String(postId)] = new Date().toISOString();
         refreshed++;
         this.logger.log(`Refreshed post ${postId}`);
       } catch (err) {
@@ -295,7 +367,9 @@ export class FreshnessService implements OnApplicationBootstrap {
       }
     }
 
-    if (!dryRun) this.saveState(state);
+    // Only merge in the posts THIS run actually refreshed - a concurrent
+    // buildIndex()/addPosts() write in the meantime isn't lost.
+    if (!dryRun && Object.keys(updates).length > 0) this.mergeAndSaveState(updates);
 
     this.logger.log(`Freshness pass done: scanned ${scanned}, refreshed ${refreshed}, failed ${failed}`);
     return { scanned, refreshed, failed };

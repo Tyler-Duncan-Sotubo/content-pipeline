@@ -11,9 +11,11 @@ import { FreshnessService } from "./freshness.service";
  *   that are both in today's rotating day-group AND actually overdue (see
  *   FreshnessService), so a missed/late run doesn't skip posts: the next
  *   run just finds them still overdue and catches up.
- * - index rebuild: weekly - re-scans categories to pick up newly published
- *   posts into the index. Deliberately infrequent since it's the only part
- *   of this job that re-walks whole categories.
+ * - index rebuild: daily - re-scans categories to pick up newly published
+ *   posts into the index. Bloggers publish manually every day (not just the
+ *   pipeline's own automated posts), so a new post needs same-day discovery,
+ *   not up to a week's delay - buildIndex() itself is lightweight (just
+ *   checks post IDs per category, no content edits), so daily is cheap.
  */
 @Injectable()
 export class FreshnessCronService {
@@ -65,7 +67,7 @@ export class FreshnessCronService {
     }
   }
 
-  @Cron("0 5 * * 0", { name: "freshness-index-build", timeZone: "Africa/Lagos" })
+  @Cron("0 5 * * *", { name: "freshness-index-build", timeZone: "Africa/Lagos" })
   async runIndexBuild(): Promise<void> {
     this.logger.log("Cron: starting freshness index build");
     try {
