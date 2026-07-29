@@ -21,21 +21,40 @@ export class FreshnessCronService {
 
   constructor(private readonly freshness: FreshnessService) {}
 
-  // 45-min cadence isn't expressible as a single cron field (60 isn't evenly
-  // divisible by 45), so each of the 12 run times - 1:00, 1:45, 2:30, 3:15,
-  // 4:00, 4:45, 5:30, 6:15, 7:00, 7:45, 8:30, 9:15 - is listed explicitly.
-  @Cron("0 1 * * *", { name: "freshness-refresh-01", timeZone: "Africa/Lagos" })
-  @Cron("45 1 * * *", { name: "freshness-refresh-02", timeZone: "Africa/Lagos" })
-  @Cron("30 2 * * *", { name: "freshness-refresh-03", timeZone: "Africa/Lagos" })
-  @Cron("15 3 * * *", { name: "freshness-refresh-04", timeZone: "Africa/Lagos" })
-  @Cron("0 4 * * *", { name: "freshness-refresh-05", timeZone: "Africa/Lagos" })
-  @Cron("45 4 * * *", { name: "freshness-refresh-06", timeZone: "Africa/Lagos" })
-  @Cron("30 5 * * *", { name: "freshness-refresh-07", timeZone: "Africa/Lagos" })
-  @Cron("15 6 * * *", { name: "freshness-refresh-08", timeZone: "Africa/Lagos" })
-  @Cron("0 7 * * *", { name: "freshness-refresh-09", timeZone: "Africa/Lagos" })
-  @Cron("45 7 * * *", { name: "freshness-refresh-10", timeZone: "Africa/Lagos" })
-  @Cron("30 8 * * *", { name: "freshness-refresh-11", timeZone: "Africa/Lagos" })
-  @Cron("15 9 * * *", { name: "freshness-refresh-12", timeZone: "Africa/Lagos" })
+  // TEMPORARY - today only (2026-07-29): the overnight 1am-10am schedule
+  // below missed most of today's runs because the freshness index was empty
+  // in production (see OnApplicationBootstrap fix in freshness.service.ts),
+  // so today's remaining runs are shifted to 7:45am-4:00pm to catch up
+  // instead of losing the whole day. REVERT to the original 1am-10am
+  // schedule (commented out below) after today.
+  //
+  // Original (1am-10am, restore this tomorrow):
+  // @Cron("0 1 * * *", { name: "freshness-refresh-01", timeZone: "Africa/Lagos" })
+  // @Cron("45 1 * * *", { name: "freshness-refresh-02", timeZone: "Africa/Lagos" })
+  // @Cron("30 2 * * *", { name: "freshness-refresh-03", timeZone: "Africa/Lagos" })
+  // @Cron("15 3 * * *", { name: "freshness-refresh-04", timeZone: "Africa/Lagos" })
+  // @Cron("0 4 * * *", { name: "freshness-refresh-05", timeZone: "Africa/Lagos" })
+  // @Cron("45 4 * * *", { name: "freshness-refresh-06", timeZone: "Africa/Lagos" })
+  // @Cron("30 5 * * *", { name: "freshness-refresh-07", timeZone: "Africa/Lagos" })
+  // @Cron("15 6 * * *", { name: "freshness-refresh-08", timeZone: "Africa/Lagos" })
+  // @Cron("0 7 * * *", { name: "freshness-refresh-09", timeZone: "Africa/Lagos" })
+  // @Cron("45 7 * * *", { name: "freshness-refresh-10", timeZone: "Africa/Lagos" })
+  // @Cron("30 8 * * *", { name: "freshness-refresh-11", timeZone: "Africa/Lagos" })
+  // @Cron("15 9 * * *", { name: "freshness-refresh-12", timeZone: "Africa/Lagos" })
+  //
+  // Today's catch-up (7:45am-4:00pm):
+  @Cron("45 7 * * *", { name: "freshness-refresh-01", timeZone: "Africa/Lagos" })
+  @Cron("30 8 * * *", { name: "freshness-refresh-02", timeZone: "Africa/Lagos" })
+  @Cron("15 9 * * *", { name: "freshness-refresh-03", timeZone: "Africa/Lagos" })
+  @Cron("0 10 * * *", { name: "freshness-refresh-04", timeZone: "Africa/Lagos" })
+  @Cron("45 10 * * *", { name: "freshness-refresh-05", timeZone: "Africa/Lagos" })
+  @Cron("30 11 * * *", { name: "freshness-refresh-06", timeZone: "Africa/Lagos" })
+  @Cron("15 12 * * *", { name: "freshness-refresh-07", timeZone: "Africa/Lagos" })
+  @Cron("0 13 * * *", { name: "freshness-refresh-08", timeZone: "Africa/Lagos" })
+  @Cron("45 13 * * *", { name: "freshness-refresh-09", timeZone: "Africa/Lagos" })
+  @Cron("30 14 * * *", { name: "freshness-refresh-10", timeZone: "Africa/Lagos" })
+  @Cron("15 15 * * *", { name: "freshness-refresh-11", timeZone: "Africa/Lagos" })
+  @Cron("0 16 * * *", { name: "freshness-refresh-12", timeZone: "Africa/Lagos" })
   async runRefresh(): Promise<void> {
     this.logger.log("Cron: starting freshness refresh pass");
     try {
