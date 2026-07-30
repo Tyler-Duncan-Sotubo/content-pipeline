@@ -13,6 +13,7 @@
     "backfill:tags": "ts-node src/backfill-tags-links.ts",
     "build:artist-pages": "ts-node src/build-artist-pages.ts",
     "freshness": "ts-node src/cli-freshness.ts",
+    "remove-baked-ads": "ts-node src/remove-baked-ads.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
