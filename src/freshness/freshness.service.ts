@@ -3,6 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WordpressService } from "../publish/wordpress.service";
+import { stripBakedAds } from "../strip-baked-ads";
 
 /**
  * Real (not faked) freshness refresh: appends/updates a "by {author} — {date}"
@@ -122,6 +123,15 @@ export class FreshnessService implements OnApplicationBootstrap {
    * marker anywhere first (so an old placement/format doesn't linger as a
    * duplicate), then prepends a fresh one. The author is the post's own real
    * author (never altered) - only the date changes, to the day of this refresh.
+   *
+   * Also strips any existing Advanced Ads "before/after content" blocks
+   * before saving - confirmed live that Advanced Ads' own save hook
+   * re-inserts its ad block on every post update, so saving content that
+   * already contains one causes it to duplicate (verified: a single
+   * patchPost() call took a post from 1 "after content" ad block to 2).
+   * Stripping first means Advanced Ads' hook always adds back exactly one
+   * fresh copy - the post still ends up with its normal ad placement, just
+   * not doubled.
    */
   refreshContent(
     bodyHtml: string,
@@ -131,7 +141,8 @@ export class FreshnessService implements OnApplicationBootstrap {
     const marker =
       `<p style="font-size: 0.85em; color: #777;">by ` +
       `<a href="${author.link}" style="color: #d32f2f;">${author.name}</a> — ${today}</p>\n`;
-    const withoutOldMarkers = bodyHtml.replace(BYLINE_MARKER_ANYWHERE_REGEX, "\n").trim();
+    const { content: withoutAds } = stripBakedAds(bodyHtml);
+    const withoutOldMarkers = withoutAds.replace(BYLINE_MARKER_ANYWHERE_REGEX, "\n").trim();
     const updated = `${marker}${withoutOldMarkers}`;
     return { content: updated, changed: updated !== bodyHtml };
   }

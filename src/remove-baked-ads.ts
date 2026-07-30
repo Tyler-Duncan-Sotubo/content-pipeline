@@ -31,6 +31,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { AppModule } from "./app.module";
 import { WordpressService } from "./publish/wordpress.service";
+import { stripBakedAds } from "./strip-baked-ads";
 
 const CATEGORY_SLUGS = [
   "download-mp3",
@@ -43,15 +44,6 @@ const CATEGORY_SLUGS = [
   "zambia",
   "united-kingdom",
 ];
-
-const BAKED_AD_REGEX =
-  /<div id="tooxc-\d+" class="tooxc-(?:before|after)-content[^"]*"[^>]*>[\s\S]*?<\/iframe><\/div>\s*/g;
-
-function stripBakedAds(content: string): { content: string; removed: number } {
-  const matches = content.match(BAKED_AD_REGEX) ?? [];
-  const cleaned = content.replace(BAKED_AD_REGEX, "");
-  return { content: cleaned, removed: matches.length };
-}
 
 async function processPostIds(
   postIds: number[],
