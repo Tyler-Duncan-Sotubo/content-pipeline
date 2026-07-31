@@ -64,8 +64,11 @@ export class PipelineService {
    */
   private linkGenreToCategory(bodyHtml: string, categorySlug: string): string {
     const categoryUrl = `${this.wpUrl}/${categorySlug}`;
+    // Genre can be followed by <br> (older posts, when Release Date came
+    // after it) or directly by </p> (current posts, since Genre is now the
+    // last field in the metadata block - Release Date was removed).
     return bodyHtml.replace(
-      /(<strong>Genre:<\/strong>\s*)([^<]+?)(\s*<br)/i,
+      /(<strong>Genre:<\/strong>\s*)([^<]+?)(\s*(?:<br|<\/p>))/i,
       (_match, prefix, genreText, suffix) =>
         `${prefix}<a href="${categoryUrl}">${genreText.trim()}</a>${suffix}`,
     );

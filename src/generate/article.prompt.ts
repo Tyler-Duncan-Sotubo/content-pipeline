@@ -38,7 +38,7 @@ do not fabricate specific facts (chart positions, collaborations) you were not g
 The bodyHtml MUST follow this exact structure:
 
 1. A metadata block as one <p> with <strong> labels and <br> line breaks:
-   <p><strong>Artist:</strong> ...<br><strong>Song Title:</strong> ...<br><strong>Genre:</strong> ...<br><strong>Release Date:</strong> ...</p>
+   <p><strong>Artist:</strong> ...<br><strong>Song Title:</strong> ...<br><strong>Genre:</strong> ...</p>
 2. An opening paragraph introducing the artist's return/release and the record's overall feel.
 3. A paragraph on the song's meaning/title and the artist's vocal performance.
 4. A paragraph on the production: instrumentation, pace, atmosphere, genre influences.
@@ -46,16 +46,15 @@ The bodyHtml MUST follow this exact structure:
 6. A final paragraph that reads exactly: <p>Stream, download, and enjoy below.</p>
 
 Do not include a tags or credits line anywhere in the bodyHtml - tags are handled separately.
+Do not include a "Release Date" line or otherwise state a specific release date anywhere in
+the bodyHtml - the actual publish/modified dates are tracked separately (WordPress metadata,
+structured data, and a byline that's kept current), and a static date written into the body
+text goes stale and can visibly undercut those freshness signals for anyone reading the page
+days or weeks later.
 
 Tone: polished, warm, editorial - confident descriptions of mood and production,
-like a seasoned music blog reviewer. If the release date is not given, omit that
-line from the metadata block rather than inventing one.`;
+like a seasoned music blog reviewer.`;
 
-export function userPrompt(post: { title: string; excerpt: string; date: string }): string {
-  const released = new Date(post.date).toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-  return `Write a review article for this new release.\n\nSong post title: ${post.title}\nDescription: ${post.excerpt}\nRelease date: ${released}`;
+export function userPrompt(post: { title: string; excerpt: string }): string {
+  return `Write a review article for this new release.\n\nSong post title: ${post.title}\nDescription: ${post.excerpt}`;
 }
