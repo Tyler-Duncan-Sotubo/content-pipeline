@@ -18,6 +18,16 @@ import { join } from "node:path";
 import { AppModule } from "./app.module";
 import { WordpressService } from "./publish/wordpress.service";
 import { stripReleaseDate } from "./strip-release-date";
+import { stripBakedAds } from "./strip-baked-ads";
+
+// Advanced Ads' save hook re-inserts its "Before Content"/"After Content" ad
+// block on every post save with no duplicate-check (confirmed live -
+// FreshnessService hit the same issue). Any save this script makes must
+// strip existing ad blocks first, so Advanced Ads' hook adds back exactly
+// one clean copy instead of duplicating whatever was already there.
+function prepareForSave(content: string): string {
+  return stripBakedAds(content).content;
+}
 
 const CATEGORY_SLUGS = [
   "download-mp3",
@@ -62,7 +72,7 @@ async function processPostIds(
 
     if (!dryRun) {
       try {
-        await wordpress.patchPost(postId, { content });
+        await wordpress.patchPost(postId, { content: prepareForSave(content) });
       } catch (err) {
         failed++;
         console.warn(`  FAILED to save post ${postId}: ${(err as Error).message}`);
@@ -114,7 +124,7 @@ async function processCategories(
 
         if (!dryRun) {
           try {
-            await wordpress.patchPost(post.id, { content });
+            await wordpress.patchPost(post.id, { content: prepareForSave(content) });
           } catch (err) {
             failed++;
             console.warn(`  FAILED to save post ${post.id}: ${(err as Error).message}`);
