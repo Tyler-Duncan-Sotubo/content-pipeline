@@ -161,6 +161,7 @@ async function run() {
     process.exit(1);
   }
 
+  process.env.DISABLE_CRONS = "true";
   const app = await NestFactory.createApplicationContext(AppModule, { bufferLogs: true });
   app.useLogger(app.get(Logger));
   const wordpress = app.get(WordpressService);

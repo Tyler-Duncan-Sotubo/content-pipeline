@@ -9,6 +9,7 @@ import { FreshnessService } from "./freshness/freshness.service";
 
 async function run() {
   const flags = process.argv.slice(2);
+  process.env.DISABLE_CRONS = "true";
   const app = await NestFactory.createApplicationContext(AppModule, { bufferLogs: true });
   app.useLogger(app.get(Logger));
   const freshness = app.get(FreshnessService);

@@ -125,14 +125,24 @@ export class WordpressService {
   ): Promise<{ link: string } | undefined> {
     try {
       const found = await this.request<{ link: string; title: { rendered: string } }[]>(
-        `/pages?search=${encodeURIComponent(artistName)}`,
+        `/pages?search=${encodeURIComponent(artistName)}&per_page=100`,
         {},
         credentials,
       );
       const target = this.normalizeTermName(artistName);
-      const match = found.find(
-        (p) => this.normalizeTermName(p.title.rendered) === target && p.link.includes("/artists/"),
-      );
+      const match = found.find((p) => {
+        if (!p.link.includes("/artists/")) return false;
+        const title = p.title.rendered;
+        // Exact match, or match with a trailing parenthetical alt-name
+        // stripped - some artist pages are titled e.g. "BNXN (Buju)" while
+        // posts refer to the artist as plain "BNXN" (confirmed live: exact
+        // match alone missed this real page and left the name unlinked).
+        const titleWithoutParen = title.replace(/\s*\([^)]*\)\s*$/, "");
+        return (
+          this.normalizeTermName(title) === target ||
+          this.normalizeTermName(titleWithoutParen) === target
+        );
+      });
       return match ? { link: match.link } : undefined;
     } catch (err) {
       this.logger.warn(`Artist page lookup failed for "${artistName}": ${(err as Error).message}`);
@@ -344,6 +354,24 @@ export class WordpressService {
   ): Promise<{ id: number; link: string; date: string; modified: string; content: { rendered: string } }[]> {
     return this.request(
       `/posts?categories=${categoryId}&page=${page}&per_page=${perPage}` +
+        `&orderby=id&order=desc&_fields=id,link,date,modified,content`,
+    );
+  }
+
+  /**
+   * Same as listPostsByCategoryNewestFirst, with an additional category to
+   * exclude (e.g. "next-rated") - used by OldPostsFreshnessService to scope
+   * its rotation to just download-mp3 posts that aren't next-rated content,
+   * without changing the shared method used elsewhere.
+   */
+  async listPostsByCategoryExcludingCategory(
+    categoryId: number,
+    excludeCategoryId: number,
+    page: number,
+    perPage = 100,
+  ): Promise<{ id: number; link: string; date: string; modified: string; content: { rendered: string } }[]> {
+    return this.request(
+      `/posts?categories=${categoryId}&categories_exclude=${excludeCategoryId}&page=${page}&per_page=${perPage}` +
         `&orderby=id&order=desc&_fields=id,link,date,modified,content`,
     );
   }

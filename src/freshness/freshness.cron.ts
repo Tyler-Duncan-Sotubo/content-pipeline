@@ -27,6 +27,7 @@ export class FreshnessCronService {
   // catches up.
   @Cron("0 * * * *", { name: "freshness-refresh", timeZone: "Africa/Lagos" })
   async runRefresh(): Promise<void> {
+    if (process.env.DISABLE_CRONS === "true") return;
     this.logger.log("Cron: starting freshness refresh pass");
     try {
       const result = await this.freshness.runPass(60);
@@ -38,6 +39,7 @@ export class FreshnessCronService {
 
   @Cron("0 5 * * *", { name: "freshness-index-build", timeZone: "Africa/Lagos" })
   async runIndexBuild(): Promise<void> {
+    if (process.env.DISABLE_CRONS === "true") return;
     this.logger.log("Cron: starting freshness index build");
     try {
       const result = await this.freshness.buildIndex();

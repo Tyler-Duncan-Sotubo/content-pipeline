@@ -17,6 +17,7 @@ export class PipelineCronService {
   // timed around djmwanga's own posting bursts and Nigerian audience active hours.
   @Cron("0 9,13,17,21 * * *", { name: "pipeline-tz", timeZone: "Africa/Lagos" })
   async runTanzania(): Promise<void> {
+    if (process.env.DISABLE_CRONS === "true") return;
     this.logger.log("Cron: starting Tanzania run");
     try {
       const summary = await this.pipeline.run();
@@ -30,6 +31,7 @@ export class PipelineCronService {
   // ceenaija's morning posting burst, plus afternoon/evening catch-up.
   @Cron("0 12,16,20 * * *", { name: "pipeline-gospel", timeZone: "Africa/Lagos" })
   async runGospel(): Promise<void> {
+    if (process.env.DISABLE_CRONS === "true") return;
     this.logger.log("Cron: starting gospel run");
     try {
       const summary = await this.pipeline.runGospel();
@@ -46,6 +48,7 @@ export class PipelineCronService {
     timeZone: "Africa/Lagos",
   })
   async runGhana(): Promise<void> {
+    if (process.env.DISABLE_CRONS === "true") return;
     this.logger.log("Cron: starting Ghana run");
     try {
       const summary = await this.pipeline.runGhana();
@@ -62,6 +65,7 @@ export class PipelineCronService {
     timeZone: "Africa/Lagos",
   })
   async runKenya(): Promise<void> {
+    if (process.env.DISABLE_CRONS === "true") return;
     this.logger.log("Cron: starting Kenya run");
     try {
       const summary = await this.pipeline.runKenya();

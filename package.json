@@ -13,8 +13,14 @@
     "backfill:tags": "ts-node src/backfill-tags-links.ts",
     "build:artist-pages": "ts-node src/build-artist-pages.ts",
     "freshness": "ts-node src/cli-freshness.ts",
+    "old-freshness": "ts-node src/cli-old-posts-freshness.ts",
     "remove-baked-ads": "ts-node src/remove-baked-ads.ts",
     "remove-release-date": "ts-node src/remove-release-date.ts",
+    "rewrite-metadata": "ts-node src/rewrite-metadata-block.ts",
+    "add-letter-intro": "ts-node src/add-artist-letter-intro.ts",
+    "fix-letter-intro-position": "ts-node src/fix-letter-intro-position.ts",
+    "append-letter-paragraph": "ts-node src/append-letter-paragraph.ts",
+    "merge-intro-into-az-row": "ts-node src/merge-intro-into-az-row.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

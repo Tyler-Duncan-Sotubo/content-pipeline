@@ -5,6 +5,7 @@ import { AppModule } from "./app.module";
 import { PipelineService } from "./pipeline/pipeline.service";
 
 async function run() {
+  process.env.DISABLE_CRONS = "true";
   const app = await NestFactory.createApplicationContext(AppModule, { bufferLogs: true });
   app.useLogger(app.get(Logger));
   const pipeline = app.get(PipelineService);
