@@ -17,20 +17,22 @@ import { stripBakedAds } from "../strip-baked-ads";
  * because using the (fake) `date` to decide eligibility would have been
  * unsafe. This service sidesteps that entirely: it doesn't use `date` for
  * anything, it just walks every eligible post below the cutoff and puts it
- * in a DETERMINISTIC day-of-week bucket (post.id % 7), reusing the exact
- * same visible "by {author} — {date}" byline treatment as the main rotation.
+ * in a DETERMINISTIC bucket (post.id % 3), reusing the exact same visible
+ * "by {author} — {date}" byline treatment as the main rotation.
  *
  * Scope: download-mp3 only, excluding Next Rated - real song-download
  * posts specifically, not news/albums/lyrics/other categories (25,277
  * posts confirmed live, vs. 37,233 across all 9 categories).
  *
  * Deterministic buckets (not "refresh whatever's overdue, capped at N/run"):
- * every post is assigned to exactly one of 7 buckets (0-6) permanently, once,
+ * every post is assigned to exactly one of 3 buckets (0-2) permanently, once,
  * based on its own ID - never reassigned. A daily cron runs ONLY today's
- * bucket (today's day-of-week mod 7), refreshing every post in it regardless
- * of pool size. This guarantees each post refreshes exactly once every 7
- * days, no more, no less - unlike an interval+cap system, which can silently
- * under-rotate if the eligible pool ever exceeds cap*runs_per_interval.
+ * bucket (a repeating day-index mod 3, NOT day-of-week - 3 doesn't evenly
+ * divide a 7-day week, so the mapping deliberately uses a day-of-epoch
+ * count instead), refreshing up to a per-run cap from it. This guarantees
+ * each post refreshes exactly once every 3 days, no more, no less - unlike
+ * an interval+cap system, which can silently under-rotate if the eligible
+ * pool ever exceeds cap*runs_per_interval.
  *
  * Deliberately a SEPARATE state file and SEPARATE mechanism from the main
  * FreshnessService, per explicit instruction not to change the existing
@@ -45,10 +47,10 @@ import { stripBakedAds } from "../strip-baked-ads";
 const TARGET_CATEGORY_SLUG = "download-mp3";
 const EXCLUDE_CATEGORY_SLUG = "next-rated";
 
-const BUCKET_COUNT = 7;
+const BUCKET_COUNT = 3;
 
 interface OldPostsFreshnessState {
-  /** Post ID (string) -> its permanent bucket assignment (0-6). Never reassigned once set. */
+  /** Post ID (string) -> its permanent bucket assignment (0-2). Never reassigned once set. */
   buckets: Record<string, number>;
   /** Post ID -> ISO timestamp last refreshed (for observability only, not used to decide eligibility). */
   lastRefreshed: Record<string, string>;
@@ -195,7 +197,7 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
   /**
    * Walks download-mp3 (excluding next-rated) and assigns every post with
    * id < maxPostId (the complement of the main rotation's scope) to its
-   * permanent bucket (post.id % 7). Existing assignments are never changed -
+   * permanent bucket (post.id % 3). Existing assignments are never changed -
    * only genuinely new-to-the-index posts get a bucket assigned.
    */
   async buildIndex(): Promise<{ totalIndexed: number; newlyAdded: number }> {
@@ -249,7 +251,7 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
    * membership (potentially thousands of posts) across many runs during the
    * day, instead of writing them all in one burst - same per-run pacing as
    * the main FreshnessService's hourly rotation, gentler on the origin
-   * server. Guarantees exactly-once-per-7-days regardless of how many hourly
+   * server. Guarantees exactly-once-per-3-days regardless of how many hourly
    * calls it takes: the bucket assignment never changes, and inProgress
    * tracks exactly which of today's bucket members are still outstanding,
    * so a missed hour or a restart never skips or duplicates a post within
@@ -258,12 +260,12 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
    * When `bucket` differs from the bucket already in progress (i.e. it's a
    * new day), inProgress is reset to the full membership of the new bucket -
    * whatever was left unfinished from the previous day's bucket is simply
-   * abandoned for this cycle (it'll get its turn again in exactly 7 days,
+   * abandoned for this cycle (it'll get its turn again in exactly 3 days,
    * same as every other post - a missed/incomplete day doesn't compound).
    */
   async runBucket(
     bucket: number,
-    limit = 220,
+    limit = 360,
     dryRun = false,
   ): Promise<{ scanned: number; refreshed: number; failed: number; remainingInBucket: number }> {
     if (bucket < 0 || bucket >= BUCKET_COUNT) {

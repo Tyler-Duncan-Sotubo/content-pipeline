@@ -42,7 +42,7 @@ async function run() {
 
   const bucket = Number(flags[bucketIdx + 1]);
   const limitIdx = flags.indexOf("--limit");
-  const limit = limitIdx >= 0 ? Number(flags[limitIdx + 1]) : 220;
+  const limit = limitIdx >= 0 ? Number(flags[limitIdx + 1]) : 360;
   const dryRun = flags.includes("--dry-run");
 
   const result = await oldFreshness.runBucket(bucket, limit, dryRun);
