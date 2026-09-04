@@ -208,7 +208,12 @@ export class EntertainmentService {
     let skipped = 0;
     let failed = 0;
 
-    const posts = await this.fetchRecent();
+    // Fetched newest-first (that's how the source paginates), but processed
+    // oldest-first. These stories often run as a sequence - a claim, a
+    // response, a counter-response - and publishing newest-first meant we
+    // covered the latest instalment while an earlier one was still queued,
+    // so the follow-up would have appeared before the story it follows.
+    const posts = (await this.fetchRecent()).slice().reverse();
 
     for (const post of posts) {
       if (published >= limit) break;
