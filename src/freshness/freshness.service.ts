@@ -351,7 +351,9 @@ export class FreshnessService implements OnApplicationBootstrap {
         await this.wordpress.patchPost(postId, { content });
         updates[String(postId)] = new Date().toISOString();
         refreshed++;
-        this.logger.log(`Refreshed post ${postId}`);
+        // No per-post success line - see the equivalent note in
+        // old-posts-freshness.service.ts. The per-run summary below is the
+        // signal that matters; failures are still logged individually.
       } catch (err) {
         failed++;
         this.logger.warn(`Failed to refresh post ${postId}: ${(err as Error).message}`);

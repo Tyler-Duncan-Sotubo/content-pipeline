@@ -327,7 +327,12 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
         lastRefreshedUpdates[String(postId)] = new Date().toISOString();
         refreshed++;
         doneThisRun.push(postId);
-        this.logger.log(`Refreshed post ${postId} (bucket ${bucket})`);
+        // Deliberately NOT logging per refreshed post: at 360/run x 24 runs
+        // this alone produced ~260k lines/month and blew through the log
+        // provider's quota (ingestion stopped entirely on Sept 3 2026, which
+        // left the Sept 1 outage invisible for days). The per-run summary
+        // below carries the same information; failures are still logged
+        // individually as warnings.
       } catch (err) {
         failed++;
         this.logger.warn(`Failed to refresh post ${postId}: ${(err as Error).message}`);
