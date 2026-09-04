@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { GeneratorService } from "../generate/generator.service";
 import { WordpressService, WpCredentials } from "../publish/wordpress.service";
 import { isDuplicateStory, PublishedStory } from "./story-dedupe";
+import { LegitSource } from "./legit-source";
 
 /**
  * Entertainment/news aggregation - deliberately separate from the music
@@ -38,6 +39,20 @@ interface EntertainmentState {
   stories?: PublishedStory[];
 }
 
+/** A story from either source, normalised. */
+interface Candidate {
+  source: "gistreel" | "legit";
+  key: string;
+  legacyKey?: string;
+  title: string;
+  date: string;
+  /** gistreel only - full body arrives with the feed */
+  bodyHtml?: string;
+  /** legit only - body must be fetched from the page */
+  link?: string;
+  imageUrl?: string;
+}
+
 export interface SourceEntertainmentPost {
   id: number;
   title: string;
@@ -54,6 +69,7 @@ export class EntertainmentService {
   private readonly artistsFile = join(process.cwd(), "artists-entertainment.json");
   private readonly categorySlug: string;
   private readonly credentials?: WpCredentials;
+  private readonly legit = new LegitSource();
 
   constructor(
     private readonly wordpress: WordpressService,
@@ -220,14 +236,46 @@ export class EntertainmentService {
     let skipped = 0;
     let failed = 0;
 
-    // Fetched newest-first (that's how the source paginates), but processed
-    // oldest-first. These stories often run as a sequence - a claim, a
-    // response, a counter-response - and publishing newest-first meant we
-    // covered the latest instalment while an earlier one was still queued,
-    // so the follow-up would have appeared before the story it follows.
-    const posts = (await this.fetchRecent()).slice().reverse();
+    // Both sources normalised into one list. Fetched newest-first (that's how
+    // each paginates), but processed oldest-first: these stories often run as
+    // a sequence - a claim, a response, a counter-response - and publishing
+    // newest-first meant covering the latest instalment while an earlier one
+    // was still queued, so the follow-up appeared before the story it follows.
+    const candidates: Candidate[] = [];
 
-    for (const post of posts) {
+    try {
+      for (const p of await this.fetchRecent()) {
+        candidates.push({
+          source: "gistreel",
+          key: `gistreel:${p.id}`,
+          legacyKey: String(p.id),
+          title: p.title,
+          date: p.date,
+          bodyHtml: p.bodyHtml,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`GistReel fetch failed: ${(err as Error).message}`);
+    }
+
+    try {
+      for (const p of await this.legit.fetchFeed()) {
+        candidates.push({
+          source: "legit",
+          key: `legit:${p.id}`,
+          title: p.title,
+          date: new Date(p.date).toISOString(),
+          link: p.link,
+          imageUrl: p.imageUrl,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Legit fetch failed: ${(err as Error).message}`);
+    }
+
+    candidates.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    for (const post of candidates) {
       if (published >= limit) break;
       scanned++;
 
@@ -235,12 +283,31 @@ export class EntertainmentService {
       if (hits.length === 0) continue;
       matched++;
 
-      if (state.processed[`gistreel:${post.id}`] || state.processed[String(post.id)]) {
+      if (state.processed[post.key] || (post.legacyKey && state.processed[post.legacyKey])) {
         skipped++;
         continue;
       }
 
-      const plainBody = this.stripHtml(post.bodyHtml);
+      // Legit's feed carries only a ~154-char summary, so the article page is
+      // fetched here - after the artist filter, so it's one page fetch per
+      // match rather than per feed item.
+      let plainBody: string;
+      if (post.source === "legit") {
+        try {
+          plainBody = await this.legit.fetchArticleBody(post.link!);
+        } catch (err) {
+          failed++;
+          this.logger.warn(`Could not fetch Legit article ${post.link}: ${(err as Error).message}`);
+          continue;
+        }
+        if (plainBody.split(/\s+/).length < 60) {
+          skipped++;
+          this.logger.log(`Skipping ${post.key}: article body too thin to rewrite`);
+          continue;
+        }
+      } else {
+        plainBody = this.stripHtml(post.bodyHtml!);
+      }
 
       // Cross-source duplicate check, before spending an LLM call. Compares
       // BODY text, not headlines: measured on real pairs, headline overlap
@@ -254,7 +321,7 @@ export class EntertainmentService {
       if (dup.duplicate) {
         skipped++;
         this.logger.log(
-          `Skipping ${post.id} as a duplicate of a story already covered (similarity ${dup.score?.toFixed(2)})`,
+          `Skipping ${post.key} as a duplicate of a story already covered (similarity ${dup.score?.toFixed(2)})`,
         );
         continue;
       }
@@ -269,7 +336,7 @@ export class EntertainmentService {
         // Title must not simply echo the source headline - that's both an SEO
         // problem and a sign the model ignored the rewrite instruction.
         if (this.stripHtml(generated.title).toLowerCase() === post.title.toLowerCase()) {
-          this.logger.warn(`Skipping ${post.id}: generated title matches the source headline verbatim`);
+          this.logger.warn(`Skipping ${post.key}: generated title matches the source headline verbatim`);
           skipped++;
           continue;
         }
@@ -287,7 +354,13 @@ export class EntertainmentService {
           }
         }
 
-        const media = this.extractMedia(post.bodyHtml);
+        // GistReel carries images/embeds inside the body; Legit's feed gives
+        // a single enclosure image and its body embeds are cross-promo widgets
+        // we deliberately strip, so only the enclosure is carried over.
+        const media =
+          post.source === "gistreel"
+            ? this.extractMedia(post.bodyHtml!)
+            : { images: post.imageUrl ? [post.imageUrl] : [], blockquotes: [] as string[] };
         if (!featuredMediaId && media.images[0]) {
           const uploaded = await this.wordpress.uploadFeaturedImage(
             media.images[0],
@@ -333,7 +406,7 @@ export class EntertainmentService {
           this.credentials,
         );
 
-        this.markProcessed(`gistreel:${post.id}`, {
+        this.markProcessed(post.key, {
           artists: hits,
           summary: plainBody.slice(0, 600),
           publishedAt: new Date().toISOString(),
@@ -342,7 +415,7 @@ export class EntertainmentService {
         this.logger.log(`Published "${generated.title}" -> ${result.link}`);
       } catch (err) {
         failed++;
-        this.logger.warn(`Failed on source post ${post.id}: ${(err as Error).message}`);
+        this.logger.warn(`Failed on source post ${post.key}: ${(err as Error).message}`);
       }
     }
 
