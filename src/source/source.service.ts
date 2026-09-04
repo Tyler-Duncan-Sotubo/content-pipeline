@@ -122,11 +122,22 @@ export class SourceService {
    * where a real artist credit belongs ("Artist - Song" / "Artist Ft. X - Song").
    */
   private titleMatchesArtist(title: string, artist: string): boolean {
+    // Spaces are stripped entirely, not collapsed: source sites disagree with
+    // our artist list on where the space goes. djmwanga writes "Alikiba"
+    // while artists.json has "Ali Kiba", so a space-preserving comparison
+    // rejected every one of his releases as a false positive - confirmed
+    // live, it silently dropped "Alikiba - Hater" (Sept 3) and months of
+    // earlier posts. Removing spaces makes both sides collapse to "alikiba".
+    //
+    // This does not loosen the guard in practice: artist names are long and
+    // distinctive enough that unrelated titles still fail. Verified against
+    // real source titles that "Kibambe" and "Kibanda Cha Rasta" are still
+    // correctly rejected for "Ali Kiba".
     const normalize = (s: string) =>
       s
         .toLowerCase()
         .normalize("NFKD")
-        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/[^a-z0-9]+/g, "")
         .trim();
     return normalize(title).includes(normalize(artist));
   }
