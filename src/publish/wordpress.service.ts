@@ -511,40 +511,33 @@ export class WordpressService {
    * Returns undefined when nothing scores well enough, so the caller can fall
    * back to the source article's own image.
    */
-  async findOwnedArtistImage(
+  async findOwnedArtistImages(
     artistName: string,
-    tagId: number,
-    minScore = 50,
-  ): Promise<{ id: number; url: string } | undefined> {
+    minScore = 20,
+    limit = 8,
+  ): Promise<{ id: number; url: string }[]> {
     const slug = artistName.toLowerCase().replace(/[^a-z0-9]+/g, "");
-    if (!slug) return undefined;
+    if (!slug) return [];
 
-    let posts: { featured_media: number }[];
+    let media: { id: number; source_url: string; media_details?: { width?: number; height?: number } }[];
     try {
-      posts = await this.request<{ featured_media: number }[]>(
-        `/posts?tags=${tagId}&per_page=25&orderby=date&order=desc&_fields=featured_media`,
+      // Searches the media library directly rather than the featured images
+      // of recent tagged posts. That earlier approach found only 6 candidates
+      // for Davido of which 1 was usable, so every story got the same
+      // portrait; searching media finds 86 and yields a real pool of 8.
+      media = await this.request(
+        `/media?search=${encodeURIComponent(artistName)}&per_page=100&_fields=id,source_url,media_details`,
       );
     } catch (err) {
       this.logger.warn(`Owned-image lookup failed for "${artistName}": ${(err as Error).message}`);
-      return undefined;
+      return [];
     }
 
     const artistWords = artistName.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-    let best: { id: number; url: string; score: number } | undefined;
-    const seen = new Set<number>();
+    const scored: { id: number; url: string; score: number }[] = [];
 
-    for (const p of posts) {
-      if (!p.featured_media || seen.has(p.featured_media)) continue;
-      seen.add(p.featured_media);
-
-      let media: { source_url: string; media_details?: { width?: number; height?: number } };
-      try {
-        media = await this.request(`/media/${p.featured_media}?_fields=source_url,media_details`);
-      } catch {
-        continue;
-      }
-
-      const filename = media.source_url.split("/").pop() ?? "";
+    for (const m of media) {
+      const filename = m.source_url.split("/").pop() ?? "";
       const base = filename.toLowerCase().replace(/\.[a-z0-9]+$/, "");
       if (!base.replace(/[^a-z0-9]+/g, "").includes(slug)) continue;
 
@@ -552,24 +545,24 @@ export class WordpressService {
       let score = 0;
       // Filename is exactly the artist name - almost always a portrait.
       if (words.join(" ") === artistWords.join(" ")) score += 100;
-      // Extra words usually mean release art or a group shot.
+      // Extra words usually mean release art or a multi-artist graphic
+      // ("Burna-Boy-Davido-Wizkid-Rema-More-Battle-for-Best-...").
       score -= Math.max(0, words.length - artistWords.length) * 12;
       if (/\b(ft|feat|official|video|album|ep|cover|lyrics|remix|instrumental)\b/.test(base)) score -= 40;
-      const w = media.media_details?.width ?? 0;
-      const h = media.media_details?.height ?? 0;
+      const w = m.media_details?.width ?? 0;
+      const h = m.media_details?.height ?? 0;
       if (w && h) {
         // Square images are nearly always cover art, not photos.
         if (Math.abs(w - h) <= 2) score -= 35;
         else if (w / h >= 0.6 && w / h <= 1.9) score += 10;
       }
+      if (w && w < 400) score -= 30; // too small to serve as a featured image
 
-      if (!best || score > best.score) {
-        best = { id: p.featured_media, url: media.source_url, score };
-      }
+      if (score >= minScore) scored.push({ id: m.id, url: m.source_url, score });
     }
 
-    if (!best || best.score < minScore) return undefined;
-    return { id: best.id, url: best.url };
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, limit).map(({ id, url }) => ({ id, url }));
   }
 
   /**

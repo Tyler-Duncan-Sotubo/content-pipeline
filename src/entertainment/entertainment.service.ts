@@ -37,6 +37,9 @@ interface EntertainmentState {
   processed: Record<string, string>;
   /** What we've actually covered, for cross-source duplicate detection. */
   stories?: PublishedStory[];
+  /** artist -> media ids used recently, newest first. Drives image rotation
+   * so consecutive posts about the same artist don't reuse one portrait. */
+  recentImages?: Record<string, number[]>;
 }
 
 /** A story from either source, normalised. */
@@ -93,7 +96,11 @@ export class EntertainmentService {
     }
   }
 
-  private markProcessed(sourceKey: string, story?: PublishedStory): void {
+  private markProcessed(
+    sourceKey: string,
+    story?: PublishedStory,
+    usedImage?: { artist: string; mediaId: number },
+  ): void {
     // Re-read at write time so a concurrent run can't erase our entry.
     const current = this.loadState();
     current.processed[sourceKey] = new Date().toISOString();
@@ -103,6 +110,13 @@ export class EntertainmentService {
       // Only the recent window is ever consulted, so don't grow forever.
       const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
       current.stories = stories.filter((s) => new Date(s.publishedAt).getTime() >= cutoff);
+    }
+    if (usedImage) {
+      const map = current.recentImages ?? {};
+      // Keep only the last few per artist: once the pool has cycled, the
+      // oldest becomes eligible again.
+      map[usedImage.artist] = [usedImage.mediaId, ...(map[usedImage.artist] ?? [])].slice(0, 6);
+      current.recentImages = map;
     }
     writeFileSync(this.stateFile, JSON.stringify(current, null, 2));
   }
@@ -326,6 +340,8 @@ export class EntertainmentService {
         continue;
       }
 
+      let usedImage: { artist: string; mediaId: number } | undefined;
+
       try {
         const generated = await this.generator.generateEntertainmentPost({
           sourceTitle: post.title,
@@ -343,15 +359,21 @@ export class EntertainmentService {
 
         // Prefer an image we already own for the primary artist; fall back to
         // the source's own image (re-uploaded, never hot-linked).
+        //
+        // Rotates through the pool rather than always taking the top scorer:
+        // the first three entertainment posts all used the same Davido.jpg,
+        // because "best available" is deterministic. Least-recently-used is
+        // tracked in state so the choice survives across runs.
         let featuredMediaId: number | undefined;
         let ownedImageUrl: string | undefined;
-        const primaryTagId = await this.wordpress.findTagId(hits[0]);
-        if (primaryTagId) {
-          const owned = await this.wordpress.findOwnedArtistImage(hits[0], primaryTagId);
-          if (owned) {
-            featuredMediaId = owned.id;
-            ownedImageUrl = owned.url;
-          }
+        const pool = await this.wordpress.findOwnedArtistImages(hits[0]);
+        if (pool.length > 0) {
+          const recent = state.recentImages?.[hits[0]] ?? [];
+          const unused = pool.filter((img) => !recent.includes(img.id));
+          const chosen = unused[0] ?? pool[0];
+          featuredMediaId = chosen.id;
+          ownedImageUrl = chosen.url;
+          usedImage = { artist: hits[0], mediaId: chosen.id };
         }
 
         // GistReel carries images/embeds inside the body; Legit's feed gives
@@ -406,11 +428,15 @@ export class EntertainmentService {
           this.credentials,
         );
 
-        this.markProcessed(post.key, {
-          artists: hits,
-          summary: plainBody.slice(0, 600),
-          publishedAt: new Date().toISOString(),
-        });
+        this.markProcessed(
+          post.key,
+          {
+            artists: hits,
+            summary: plainBody.slice(0, 600),
+            publishedAt: new Date().toISOString(),
+          },
+          usedImage,
+        );
         published++;
         this.logger.log(`Published "${generated.title}" -> ${result.link}`);
       } catch (err) {
