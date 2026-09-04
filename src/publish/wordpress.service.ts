@@ -32,21 +32,80 @@ export class WordpressService {
     return "Basic " + Buffer.from(`${creds.user}:${creds.appPassword}`).toString("base64");
   }
 
+  /**
+   * Transient network/server failures worth retrying. ECONNRESET in
+   * particular is what a WAF (Wordfence/Cloudflare) does when it decides
+   * our IP is sending too much - the TLS connection is killed mid-read
+   * rather than answered with an HTTP status. Confirmed live: a flood of
+   * unhandled ECONNRESETs on Sept 1 2026 killed the whole app, taking both
+   * freshness rotations down for days. A bare fetch() throws these as raw
+   * TypeErrors that never reach the `!res.ok` check below, so they have to
+   * be caught explicitly here.
+   */
+  private isRetryableError(err: unknown): boolean {
+    const code = (err as { cause?: { code?: string }; code?: string })?.cause?.code
+      ?? (err as { code?: string })?.code;
+    return (
+      code === "ECONNRESET" ||
+      code === "ETIMEDOUT" ||
+      code === "ECONNREFUSED" ||
+      code === "EAI_AGAIN" ||
+      code === "UND_ERR_SOCKET" ||
+      code === "UND_ERR_CONNECT_TIMEOUT"
+    );
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   private async request<T>(path: string, init: RequestInit = {}, credentials?: WpCredentials): Promise<T> {
     const authHeader = credentials ? this.buildAuthHeader(credentials) : this.defaultAuthHeader;
-    const res = await fetch(`${this.baseUrl}/wp-json/wp/v2${path}`, {
-      ...init,
-      headers: {
-        Authorization: authHeader,
-        "Content-Type": "application/json",
-        ...(init.headers as Record<string, string>),
-      },
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`WordPress ${init.method ?? "GET"} ${path} failed (${res.status}): ${body}`);
+    const maxAttempts = 4;
+    let lastErr: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let res: Response;
+      try {
+        res = await fetch(`${this.baseUrl}/wp-json/wp/v2${path}`, {
+          ...init,
+          headers: {
+            Authorization: authHeader,
+            "Content-Type": "application/json",
+            ...(init.headers as Record<string, string>),
+          },
+        });
+      } catch (err) {
+        lastErr = err;
+        if (!this.isRetryableError(err) || attempt === maxAttempts) {
+          const code = (err as { cause?: { code?: string } })?.cause?.code ?? "unknown";
+          throw new Error(
+            `WordPress ${init.method ?? "GET"} ${path} network error (${code}) after ${attempt} attempt(s)`,
+          );
+        }
+        // Exponential backoff (1s, 2s, 4s) - gives a rate-limiting WAF room
+        // to cool off instead of hammering it with immediate retries.
+        await this.sleep(1000 * 2 ** (attempt - 1));
+        continue;
+      }
+
+      // 429/5xx are also transient - back off and retry rather than failing
+      // the whole run on one blip.
+      if ((res.status === 429 || res.status >= 500) && attempt < maxAttempts) {
+        await this.sleep(1000 * 2 ** (attempt - 1));
+        continue;
+      }
+
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`WordPress ${init.method ?? "GET"} ${path} failed (${res.status}): ${body}`);
+      }
+      return res.json() as Promise<T>;
     }
-    return res.json() as Promise<T>;
+
+    throw new Error(
+      `WordPress ${init.method ?? "GET"} ${path} failed after ${maxAttempts} attempts: ${(lastErr as Error)?.message ?? "unknown"}`,
+    );
   }
 
   /** Splits "Jux Ft. Mbosso" / "A feat B" / "A & B" / "A, B" into separate artist names. */
