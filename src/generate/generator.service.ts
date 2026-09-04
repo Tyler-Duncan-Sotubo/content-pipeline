@@ -10,9 +10,16 @@ import {
   ARTIST_BIO_SYSTEM_PROMPT,
   artistBioUserPrompt,
 } from "./artist-bio.prompt";
+import {
+  GeneratedEntertainmentPost,
+  entertainmentSchema,
+  ENTERTAINMENT_SYSTEM_PROMPT,
+  entertainmentUserPrompt,
+} from "./entertainment.prompt";
 
 export { GeneratedArticle } from "./article.prompt";
 export { GeneratedArtistBio } from "./artist-bio.prompt";
+export { GeneratedEntertainmentPost } from "./entertainment.prompt";
 
 @Injectable()
 export class GeneratorService {
@@ -114,5 +121,57 @@ export class GeneratorService {
     const block = response.content.find((b) => b.type === "text");
     if (!block || block.type !== "text") throw new Error("Anthropic returned an empty response");
     return JSON.parse(block.text) as GeneratedArtistBio;
+  }
+
+  generateEntertainmentPost(params: {
+    sourceTitle: string;
+    sourceBody: string;
+    matchedArtists: string[];
+  }): Promise<GeneratedEntertainmentPost> {
+    return this.provider === "anthropic"
+      ? this.generateEntertainmentWithAnthropic(params)
+      : this.generateEntertainmentWithOpenAI(params);
+  }
+
+  private async generateEntertainmentWithOpenAI(params: {
+    sourceTitle: string;
+    sourceBody: string;
+    matchedArtists: string[];
+  }): Promise<GeneratedEntertainmentPost> {
+    const response = await this.openai!.chat.completions.create({
+      model: this.openaiModel,
+      messages: [
+        { role: "system", content: ENTERTAINMENT_SYSTEM_PROMPT },
+        { role: "user", content: entertainmentUserPrompt(params) },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "entertainment_post", strict: true, schema: entertainmentSchema },
+      },
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (!content) throw new Error("OpenAI returned an empty response");
+    return JSON.parse(content) as GeneratedEntertainmentPost;
+  }
+
+  private async generateEntertainmentWithAnthropic(params: {
+    sourceTitle: string;
+    sourceBody: string;
+    matchedArtists: string[];
+  }): Promise<GeneratedEntertainmentPost> {
+    const response = await this.anthropic!.messages.create({
+      model: this.anthropicModel,
+      max_tokens: 4000,
+      system: ENTERTAINMENT_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: entertainmentUserPrompt(params) }],
+      output_config: {
+        format: { type: "json_schema", schema: entertainmentSchema as unknown as Record<string, unknown> },
+      },
+    });
+
+    const block = response.content.find((b) => b.type === "text");
+    if (!block || block.type !== "text") throw new Error("Anthropic returned an empty response");
+    return JSON.parse(block.text) as GeneratedEntertainmentPost;
   }
 }

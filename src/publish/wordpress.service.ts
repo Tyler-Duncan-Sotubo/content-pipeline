@@ -280,7 +280,7 @@ export class WordpressService {
    * URL on OUR domain, so the body content can reference our own copy instead
    * of hotlinking the source site's image.
    */
-  private async uploadFeaturedImage(
+  async uploadFeaturedImage(
     imageUrl: string,
     filenameHint: string,
     credentials?: WpCredentials,
@@ -494,5 +494,152 @@ export class WordpressService {
       credentials,
     );
     return { id: post.id, link: post.link, status: post.status };
+  }
+
+  /**
+   * Finds an image we already own for this artist, so entertainment posts can
+   * reuse tooxclusive's own media rather than another site's screenshots.
+   *
+   * Scoring matters here: a naive "most recent post's featured image" picks
+   * badly. Confirmed live - Davido's newest featured image was album artwork
+   * ("Davido-ORIADE.jpg") and one of Wizkid's was a multi-artist graphic
+   * ("Post-Fame-Afrobeats-Asake-Wizkid.jpg"), neither of which belongs on a
+   * story about a social media exchange. So candidates must name the artist
+   * in the FILENAME, and are then ranked to prefer a plain portrait over
+   * release art.
+   *
+   * Returns undefined when nothing scores well enough, so the caller can fall
+   * back to the source article's own image.
+   */
+  async findOwnedArtistImage(
+    artistName: string,
+    tagId: number,
+    minScore = 50,
+  ): Promise<{ id: number; url: string } | undefined> {
+    const slug = artistName.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    if (!slug) return undefined;
+
+    let posts: { featured_media: number }[];
+    try {
+      posts = await this.request<{ featured_media: number }[]>(
+        `/posts?tags=${tagId}&per_page=25&orderby=date&order=desc&_fields=featured_media`,
+      );
+    } catch (err) {
+      this.logger.warn(`Owned-image lookup failed for "${artistName}": ${(err as Error).message}`);
+      return undefined;
+    }
+
+    const artistWords = artistName.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    let best: { id: number; url: string; score: number } | undefined;
+    const seen = new Set<number>();
+
+    for (const p of posts) {
+      if (!p.featured_media || seen.has(p.featured_media)) continue;
+      seen.add(p.featured_media);
+
+      let media: { source_url: string; media_details?: { width?: number; height?: number } };
+      try {
+        media = await this.request(`/media/${p.featured_media}?_fields=source_url,media_details`);
+      } catch {
+        continue;
+      }
+
+      const filename = media.source_url.split("/").pop() ?? "";
+      const base = filename.toLowerCase().replace(/\.[a-z0-9]+$/, "");
+      if (!base.replace(/[^a-z0-9]+/g, "").includes(slug)) continue;
+
+      const words = base.split(/[^a-z0-9]+/).filter(Boolean);
+      let score = 0;
+      // Filename is exactly the artist name - almost always a portrait.
+      if (words.join(" ") === artistWords.join(" ")) score += 100;
+      // Extra words usually mean release art or a group shot.
+      score -= Math.max(0, words.length - artistWords.length) * 12;
+      if (/\b(ft|feat|official|video|album|ep|cover|lyrics|remix|instrumental)\b/.test(base)) score -= 40;
+      const w = media.media_details?.width ?? 0;
+      const h = media.media_details?.height ?? 0;
+      if (w && h) {
+        // Square images are nearly always cover art, not photos.
+        if (Math.abs(w - h) <= 2) score -= 35;
+        else if (w / h >= 0.6 && w / h <= 1.9) score += 10;
+      }
+
+      if (!best || score > best.score) {
+        best = { id: p.featured_media, url: media.source_url, score };
+      }
+    }
+
+    if (!best || best.score < minScore) return undefined;
+    return { id: best.id, url: best.url };
+  }
+
+  /**
+   * Creates a post from already-built HTML. Unlike publishArticle(), this
+   * doesn't assume the music-release shape (artist/songTitle/genre), so it
+   * can serve the entertainment pipeline.
+   */
+  async createPost(
+    params: {
+      title: string;
+      excerpt: string;
+      content: string;
+      tagIds: number[];
+      categoryIds?: number[];
+      featuredMediaId?: number;
+      status?: "draft" | "publish";
+    },
+    credentials?: WpCredentials,
+  ): Promise<PublishResult> {
+    const post = await this.request<{ id: number; link: string; status: string }>(
+      "/posts",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          title: params.title,
+          excerpt: params.excerpt,
+          content: params.content,
+          tags: params.tagIds,
+          ...(params.categoryIds?.length ? { categories: params.categoryIds } : {}),
+          ...(params.featuredMediaId ? { featured_media: params.featuredMediaId } : {}),
+          status: params.status ?? this.postStatus,
+        }),
+      },
+      credentials,
+    );
+    return { id: post.id, link: post.link, status: post.status };
+  }
+
+  /** Resolves tag names to IDs without unioning in a primary artist - the
+   * entertainment pipeline already knows exactly which artists matched. */
+  resolveTagsExact(names: string[], credentials?: WpCredentials): Promise<number[]> {
+    return this.resolveTerms("/tags", [...new Set(names.map((n) => n.trim()).filter(Boolean))], credentials);
+  }
+
+  /** Looks up a tag ID by exact (normalised) name, without creating it. */
+  async findTagId(name: string, credentials?: WpCredentials): Promise<number | undefined> {
+    try {
+      const found = await this.request<{ id: number; name: string }[]>(
+        `/tags?search=${encodeURIComponent(name)}&per_page=100&_fields=id,name`,
+        {},
+        credentials,
+      );
+      const target = this.normalizeTermName(name);
+      return found.find((t) => this.normalizeTermName(t.name) === target)?.id;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Recent posts carrying a given tag - used to pick "Read More" internal links. */
+  async recentPostsByTag(
+    tagId: number,
+    limit = 6,
+  ): Promise<{ id: number; link: string; title: { rendered: string } }[]> {
+    try {
+      return await this.request(
+        `/posts?tags=${tagId}&per_page=${limit}&orderby=date&order=desc&_fields=id,link,title`,
+      );
+    } catch {
+      return [];
+    }
   }
 }

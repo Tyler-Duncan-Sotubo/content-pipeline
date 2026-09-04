@@ -21,7 +21,8 @@
     "fix-letter-intro-position": "ts-node src/fix-letter-intro-position.ts",
     "append-letter-paragraph": "ts-node src/append-letter-paragraph.ts",
     "merge-intro-into-az-row": "ts-node src/merge-intro-into-az-row.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "entertainment": "ts-node src/cli-entertainment.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

@@ -3,6 +3,7 @@ import { ConfigModule } from "@nestjs/config";
 import { ScheduleModule } from "@nestjs/schedule";
 import { PipelineModule } from "./pipeline/pipeline.module";
 import { FreshnessModule } from "./freshness/freshness.module";
+import { EntertainmentModule } from "./entertainment/entertainment.module";
 import { LoggerModule } from "./logger/logger.module";
 import { validateEnv } from "./env.validation";
 
@@ -13,6 +14,7 @@ import { validateEnv } from "./env.validation";
     LoggerModule,
     PipelineModule,
     FreshnessModule,
+    EntertainmentModule,
   ],
 })
 export class AppModule {}

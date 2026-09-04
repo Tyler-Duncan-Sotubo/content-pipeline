@@ -27,6 +27,12 @@ export const envSchema = z
     WP_USER_KENYA: z.string().optional(),
     WP_APP_PASSWORD_KENYA: z.string().optional(),
 
+    // Optional separate publisher account for entertainment/news aggregation.
+    // Kept distinct from the music pipelines so those posts are attributed to
+    // their own author rather than appearing under a music editor's byline.
+    WP_USER_ENTERTAINMENT: z.string().optional(),
+    WP_APP_PASSWORD_ENTERTAINMENT: z.string().optional(),
+
     SPOTIFY_CLIENT_ID: z.string().optional(),
     SPOTIFY_CLIENT_SECRET: z.string().optional(),
     // Which country's source site to pull from - see src/countries.ts
