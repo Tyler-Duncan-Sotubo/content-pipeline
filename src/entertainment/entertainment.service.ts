@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GeneratorService } from "../generate/generator.service";
 import { WordpressService, WpCredentials } from "../publish/wordpress.service";
+import { isDuplicateStory, PublishedStory } from "./story-dedupe";
 
 /**
  * Entertainment/news aggregation - deliberately separate from the music
@@ -29,8 +30,12 @@ import { WordpressService, WpCredentials } from "../publish/wordpress.service";
 const SOURCE_URL = "https://www.gistreel.com";
 
 interface EntertainmentState {
-  /** source post id -> ISO timestamp we published it */
+  /** source post id -> ISO timestamp we published it. Keyed per source, so
+   * "gistreel:1297375". Catches the same source re-served, not the same
+   * story from a different site - that's what `stories` is for. */
   processed: Record<string, string>;
+  /** What we've actually covered, for cross-source duplicate detection. */
+  stories?: PublishedStory[];
 }
 
 export interface SourceEntertainmentPost {
@@ -72,10 +77,17 @@ export class EntertainmentService {
     }
   }
 
-  private markProcessed(sourceId: number): void {
+  private markProcessed(sourceKey: string, story?: PublishedStory): void {
     // Re-read at write time so a concurrent run can't erase our entry.
     const current = this.loadState();
-    current.processed[String(sourceId)] = new Date().toISOString();
+    current.processed[sourceKey] = new Date().toISOString();
+    if (story) {
+      const stories = current.stories ?? [];
+      stories.push(story);
+      // Only the recent window is ever consulted, so don't grow forever.
+      const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+      current.stories = stories.filter((s) => new Date(s.publishedAt).getTime() >= cutoff);
+    }
     writeFileSync(this.stateFile, JSON.stringify(current, null, 2));
   }
 
@@ -223,15 +235,34 @@ export class EntertainmentService {
       if (hits.length === 0) continue;
       matched++;
 
-      if (state.processed[String(post.id)]) {
+      if (state.processed[`gistreel:${post.id}`] || state.processed[String(post.id)]) {
         skipped++;
+        continue;
+      }
+
+      const plainBody = this.stripHtml(post.bodyHtml);
+
+      // Cross-source duplicate check, before spending an LLM call. Compares
+      // BODY text, not headlines: measured on real pairs, headline overlap
+      // ranked genuine duplicates (0.25) BELOW unrelated same-artist stories
+      // (0.44), because headlines mostly share artist names while the actual
+      // event words differ. Body text separates cleanly (0.28 vs 0.04).
+      const dup = isDuplicateStory(
+        { artists: hits, summary: plainBody.slice(0, 600) },
+        state.stories ?? [],
+      );
+      if (dup.duplicate) {
+        skipped++;
+        this.logger.log(
+          `Skipping ${post.id} as a duplicate of a story already covered (similarity ${dup.score?.toFixed(2)})`,
+        );
         continue;
       }
 
       try {
         const generated = await this.generator.generateEntertainmentPost({
           sourceTitle: post.title,
-          sourceBody: this.stripHtml(post.bodyHtml).slice(0, 6000),
+          sourceBody: plainBody.slice(0, 6000),
           matchedArtists: hits,
         });
 
@@ -302,7 +333,11 @@ export class EntertainmentService {
           this.credentials,
         );
 
-        this.markProcessed(post.id);
+        this.markProcessed(`gistreel:${post.id}`, {
+          artists: hits,
+          summary: plainBody.slice(0, 600),
+          publishedAt: new Date().toISOString(),
+        });
         published++;
         this.logger.log(`Published "${generated.title}" -> ${result.link}`);
       } catch (err) {
