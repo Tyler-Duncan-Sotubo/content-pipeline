@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WordpressService } from "../publish/wordpress.service";
 import { stripBakedAds } from "../strip-baked-ads";
+import { concurrentMap } from "./concurrent-map";
 
 /**
  * Second, independent freshness rotation for posts BELOW the main
@@ -48,6 +49,7 @@ const TARGET_CATEGORY_SLUG = "download-mp3";
 const EXCLUDE_CATEGORY_SLUG = "next-rated";
 
 const BUCKET_COUNT = 3;
+const REFRESH_CONCURRENCY = 3;
 
 interface OldPostsFreshnessState {
   /** Post ID (string) -> its permanent bucket assignment (0-2). Never reassigned once set. */
@@ -294,7 +296,7 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
     const lastRefreshedUpdates: Record<string, string> = {};
     const doneThisRun: number[] = [];
 
-    for (const postId of toProcess) {
+    await concurrentMap(toProcess, REFRESH_CONCURRENCY, async (postId) => {
       scanned++;
 
       let content: string;
@@ -304,7 +306,7 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
         const result = this.refreshContent(post.content, author);
         if (!result.changed) {
           doneThisRun.push(postId);
-          continue;
+          return;
         }
         content = result.content;
       } catch (err) {
@@ -313,13 +315,13 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
         // Not marked done - will be retried on the next hourly call within
         // the same day's bucket, since it's still in `remaining` minus
         // whatever WAS successfully processed (doneThisRun).
-        continue;
+        return;
       }
 
       if (dryRun) {
         refreshed++;
         this.logger.log(`[dry-run] Would refresh post ${postId} (bucket ${bucket})`);
-        continue;
+        return;
       }
 
       try {
@@ -337,7 +339,7 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
         failed++;
         this.logger.warn(`Failed to refresh post ${postId}: ${(err as Error).message}`);
       }
-    }
+    });
 
     if (!dryRun) {
       const failedIds = new Set(toProcess.filter((id) => !doneThisRun.includes(id)));

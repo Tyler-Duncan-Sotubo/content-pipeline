@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WordpressService } from "../publish/wordpress.service";
 import { stripBakedAds } from "../strip-baked-ads";
+import { concurrentMap } from "./concurrent-map";
 
 /**
  * Real (not faked) freshness refresh: appends/updates a "by {author} — {date}"
@@ -42,6 +43,8 @@ import { stripBakedAds } from "../strip-baked-ads";
  * current pool size and hourly cadence, the whole catalog can be refreshed
  * roughly once per interval rather than staggered across several days.
  */
+const REFRESH_CONCURRENCY = 3;
+
 const CATEGORY_SLUGS = [
   "download-mp3",
   "south-africa",
@@ -320,12 +323,14 @@ export class FreshnessService implements OnApplicationBootstrap {
     let failed = 0;
     const updates: Record<string, string> = {};
 
+    // Sliced to `limit` up front rather than breaking out of the loop on a
+    // counter: under concurrency the lanes would race on that check.
     const candidateIds = Object.keys(state.posts)
       .map(Number)
-      .filter((id) => this.isDue(state.posts[String(id)]));
+      .filter((id) => this.isDue(state.posts[String(id)]))
+      .slice(0, limit);
 
-    for (const postId of candidateIds) {
-      if (refreshed >= limit) break;
+    await concurrentMap(candidateIds, REFRESH_CONCURRENCY, async (postId) => {
       scanned++;
 
       let content: string;
@@ -333,18 +338,18 @@ export class FreshnessService implements OnApplicationBootstrap {
         const post = await this.wordpress.getPostContent(postId);
         const author = await this.resolveAuthorInfo(post.author);
         const result = this.refreshContent(post.content, author);
-        if (!result.changed) continue;
+        if (!result.changed) return;
         content = result.content;
       } catch (err) {
         failed++;
         this.logger.warn(`Failed to fetch post ${postId}: ${(err as Error).message}`);
-        continue;
+        return;
       }
 
       if (dryRun) {
         refreshed++;
         this.logger.log(`[dry-run] Would refresh post ${postId}`);
-        continue;
+        return;
       }
 
       try {
@@ -358,7 +363,7 @@ export class FreshnessService implements OnApplicationBootstrap {
         failed++;
         this.logger.warn(`Failed to refresh post ${postId}: ${(err as Error).message}`);
       }
-    }
+    });
 
     // Only merge in the posts THIS run actually refreshed - a concurrent
     // buildIndex()/addPosts() write in the meantime isn't lost.

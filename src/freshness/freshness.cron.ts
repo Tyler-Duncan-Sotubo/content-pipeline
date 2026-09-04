@@ -18,22 +18,41 @@ import { FreshnessService } from "./freshness.service";
 @Injectable()
 export class FreshnessCronService {
   private readonly logger = new Logger(FreshnessCronService.name);
+  private isRunning = false;
 
   constructor(private readonly freshness: FreshnessService) {}
 
-  // Simple hourly schedule, all 24 hours (24 runs/day). Self-healing: each
-  // run only touches posts that are actually overdue, so a missed run
-  // doesn't skip posts - the next run just finds them still overdue and
-  // catches up.
-  @Cron("0 * * * *", { name: "freshness-refresh", timeZone: "Africa/Lagos" })
+  /**
+   * Overnight only, 01:00-05:00 Lagos, 500 posts per run.
+   *
+   * This rotation and the old-posts one previously both ran hourly around
+   * the clock, so they competed for the same WordPress write capacity all
+   * day. Splitting them by time of day keeps each one's writes off the
+   * other's - and puts this one in the quietest traffic window.
+   *
+   * 5 runs x 500 covers the ~1,825 posts in scope comfortably (finishes in
+   * about 4 runs), and at roughly 3 seconds per post a 500-post run takes
+   * ~25 minutes, well inside its hour.
+   *
+   * Self-healing: each run only touches posts that are actually overdue, so
+   * a missed run doesn't skip anything - the next one finds them still due.
+   */
+  @Cron("0 1-5 * * *", { name: "freshness-refresh", timeZone: "Africa/Lagos" })
   async runRefresh(): Promise<void> {
     if (process.env.DISABLE_CRONS === "true") return;
+    if (this.isRunning) {
+      this.logger.warn("Cron: freshness pass still running from a previous trigger - skipping");
+      return;
+    }
+    this.isRunning = true;
     this.logger.log("Cron: starting freshness refresh pass");
     try {
-      const result = await this.freshness.runPass(60);
+      const result = await this.freshness.runPass(500);
       this.logger.log(`Cron: freshness pass done - ${JSON.stringify(result)}`);
     } catch (err) {
       this.logger.error(`Cron: freshness pass failed: ${(err as Error).message}`);
+    } finally {
+      this.isRunning = false;
     }
   }
 
