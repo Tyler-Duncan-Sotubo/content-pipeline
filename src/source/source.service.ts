@@ -122,24 +122,32 @@ export class SourceService {
    * where a real artist credit belongs ("Artist - Song" / "Artist Ft. X - Song").
    */
   private titleMatchesArtist(title: string, artist: string): boolean {
-    // Spaces are stripped entirely, not collapsed: source sites disagree with
-    // our artist list on where the space goes. djmwanga writes "Alikiba"
-    // while artists.json has "Ali Kiba", so a space-preserving comparison
-    // rejected every one of his releases as a false positive - confirmed
-    // live, it silently dropped "Alikiba - Hater" (Sept 3) and months of
-    // earlier posts. Removing spaces makes both sides collapse to "alikiba".
+    // Two problems this has to solve at once.
     //
-    // This does not loosen the guard in practice: artist names are long and
-    // distinctive enough that unrelated titles still fail. Verified against
-    // real source titles that "Kibambe" and "Kibanda Cha Rasta" are still
-    // correctly rejected for "Ali Kiba".
-    const normalize = (s: string) =>
-      s
-        .toLowerCase()
-        .normalize("NFKD")
-        .replace(/[^a-z0-9]+/g, "")
-        .trim();
-    return normalize(title).includes(normalize(artist));
+    // 1. Source sites disagree with our artist list on spacing. djmwanga
+    //    writes "Alikiba"; artists.json has "Ali Kiba". A space-preserving
+    //    comparison rejected every one of his releases as a false positive -
+    //    confirmed live, it silently dropped "Alikiba - Hater" (Sept 3) and
+    //    months of earlier posts. So spacing between the name's parts must
+    //    be optional.
+    //
+    // 2. Simply stripping all spaces and doing a substring test is too
+    //    loose for short names: "Nolly" then matches "Nollywood", "Eben"
+    //    matches inside unrelated words. Confirmed live against a general
+    //    entertainment feed, that produced 8 matches of which all 8 were
+    //    false positives.
+    //
+    // So: allow optional separators *within* the name, but require a
+    //  non-alphanumeric boundary on either side of the whole match.
+    // "Ali Kiba" still matches "Alikiba"; "Nolly" no longer matches
+    // "Nollywood".
+    const normalized = title.toLowerCase().normalize("NFKD");
+    const pattern = artist
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^a-z0-9]+/g, "[^a-z0-9]*");
+    if (!pattern) return false;
+    return new RegExp(`(^|[^a-z0-9])${pattern}($|[^a-z0-9])`, "i").test(normalized);
   }
 
   async searchByArtist(site: SourceSiteConfig, artist: string, perPage = 10): Promise<SourcePost[]> {
