@@ -180,7 +180,6 @@ export class EntertainmentService {
     readMore: string[];
     imageHtml?: string;
     blockquotes: string[];
-    sourceLink: string;
   }): string {
     const parts: string[] = [];
     parts.push(...params.intro.map((p) => `<p>${p}</p>`));
@@ -191,9 +190,6 @@ export class EntertainmentService {
     parts.push(...params.blockquotes);
     parts.push(`<p>${params.closing}</p>`);
     if (params.readMore[1]) parts.push(params.readMore[1]);
-    parts.push(
-      `<p style="font-size:0.9em;"><em>Source: <a href="${params.sourceLink}" rel="nofollow noopener" target="_blank">GistReel</a></em></p>`,
-    );
     return parts.join("\n");
   }
 
@@ -278,7 +274,6 @@ export class EntertainmentService {
           readMore,
           imageHtml,
           blockquotes: media.blockquotes,
-          sourceLink: post.link,
         });
 
         if (dryRun) {
