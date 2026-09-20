@@ -9,61 +9,57 @@ import { OldPostsFreshnessService } from "./old-posts-freshness.service";
  * excluded from freshness entirely, and why that exclusion doesn't need to
  * mean "no freshness signal ever."
  *
- * Deterministic 3-day bucket system: every eligible post is permanently
- * assigned to one of 3 buckets (post.id % 3). Today's bucket = a
- * continuously-incrementing day-of-epoch counter mod 3 - NOT day-of-week
- * (getDay() is 0-6 and doesn't evenly divide into 3 buckets, which would
- * make some buckets run on 2 days out of every 7 and others on fewer,
- * breaking the "exactly once every 3 days" guarantee). The epoch-day
- * counter increments by exactly 1 every calendar day forever, so bucket 0,
- * 1, 2, 0, 1, 2... cycles with true 3-day regularity regardless of what
- * day-of-week or month it lands on.
+ * Runs 5x, every 30 minutes, 04:30-07:00 Lagos, 250 posts per run
+ * (1,250/day capacity) - interval+cap model (same as the main rotation),
+ * not the deterministic bucket system this used to run. Both rotations
+ * used to run 500/run, old-posts spanning 06:00-00:00 - large write bursts
+ * against WordPress, spread across most of the day, that were visibly
+ * slowing the live site. Both are now confined to a single overnight
+ * block back-to-back - main: 01:00-04:30, this one: 04:30-07:00 (see
+ * FreshnessCronService) - at the smaller 250/run size, so neither one's
+ * writes land during real traffic hours.
  *
- * Runs hourly 06:00-00:00 Lagos at 500 posts per run. The overnight hours
- * (01:00-05:00) belong to the main freshness rotation instead - the two used
- * to run hourly around the clock and compete for the same WordPress write
- * capacity, so they're now separated by time of day.
- *
- * 19 runs x 500 = 9,500 against ~8,426 posts per bucket, so a bucket still
- * finishes within its own day with headroom - which matters, because an
- * unfinished bucket means those posts wait a full extra cycle. At roughly
- * 3 seconds per post a 500-post run takes ~25 minutes, comfortably inside
- * its hour. Same resumable-across-runs approach via inProgress tracking,
- * spreading what could be a multi-thousand-post daily burst across many
- * hourly runs instead of one large spike, while still guaranteeing every
- * post refreshes exactly once every 3 days.
+ * At 1,250/day against ~25,277 posts, the pool cycles roughly once every
+ * ~20 days. Self-healing: each run only touches posts that are actually
+ * overdue, so a missed run doesn't skip anything - the next one finds
+ * them still due.
  */
 @Injectable()
 export class OldPostsFreshnessCronService {
   private readonly logger = new Logger(OldPostsFreshnessCronService.name);
-  // Reentrancy guard: at current pacing (500 posts/run, ~25 minutes)
-  // overlap is unlikely, but a WP-side slowdown could
-  // stretch a run past the hour. Without this, @nestjs/schedule would fire
-  // the next hourly trigger anyway, and two concurrent runs would race on
+  // Reentrancy guard: at current pacing (250 posts/run, well under 30
+  // minutes) overlap is unlikely, but a WP-side slowdown could stretch a
+  // run past its slot. Without this, @nestjs/schedule would fire the next
+  // trigger anyway, and two concurrent runs would race on
   // freshness-state-old.json (mergeAndSaveState prevents lost updates, but
   // not double-processing the same posts / duplicate patchPost calls).
   private isRunning = false;
 
   constructor(private readonly oldPostsFreshness: OldPostsFreshnessService) {}
 
-  @Cron("0 6-23,0 * * *", { name: "old-posts-freshness-refresh", timeZone: "Africa/Lagos" })
-  async runRefresh(): Promise<void> {
-    if (process.env.DISABLE_CRONS === "true") return;
+  // 04:30, 05:00, 05:30, 06:00, 06:30 - 5 runs, stopping at 6:30 (last run
+  // finishes by 7:00) so this never overlaps the main rotation's
+  // 01:00-04:30 window on the other end.
+  @Cron("30 4 * * *", { name: "old-posts-freshness-refresh-430", timeZone: "Africa/Lagos" })
+  async runRefresh430(): Promise<void> {
+    await this.runRefresh();
+  }
 
+  @Cron("0,30 5-6 * * *", { name: "old-posts-freshness-refresh-5-6", timeZone: "Africa/Lagos" })
+  async runRefresh56(): Promise<void> {
+    await this.runRefresh();
+  }
+
+  private async runRefresh(): Promise<void> {
+    if (process.env.DISABLE_CRONS === "true") return;
     if (this.isRunning) {
-      this.logger.warn("Cron: old-posts freshness pass still running from a previous trigger - skipping this run");
+      this.logger.warn("Cron: old-posts freshness pass still running from a previous trigger - skipping");
       return;
     }
     this.isRunning = true;
-
-    // Days since the Unix epoch, mod 3 - increments by exactly 1 every
-    // calendar day (UTC), giving a true 3-day-regular cycle 0,1,2,0,1,2...
-    // unlike day-of-week (0-6), which doesn't divide evenly into 3 buckets.
-    const epochDay = Math.floor(Date.now() / 86_400_000);
-    const todaysBucket = epochDay % 3;
-    this.logger.log(`Cron: starting old-posts freshness pass (bucket ${todaysBucket})`);
+    this.logger.log("Cron: starting old-posts freshness refresh pass");
     try {
-      const result = await this.oldPostsFreshness.runBucket(todaysBucket, 500);
+      const result = await this.oldPostsFreshness.runPass(250);
       this.logger.log(`Cron: old-posts freshness pass done - ${JSON.stringify(result)}`);
     } catch (err) {
       this.logger.error(`Cron: old-posts freshness pass failed: ${(err as Error).message}`);
