@@ -23,23 +23,31 @@ export class FreshnessCronService {
   constructor(private readonly freshness: FreshnessService) {}
 
   /**
-   * Overnight only, 01:00-05:00 Lagos, 500 posts per run.
+   * Overnight only, 01:00-04:30 Lagos, every 30 minutes (8 runs), 250 posts
+   * per run.
    *
-   * This rotation and the old-posts one previously both ran hourly around
-   * the clock, so they competed for the same WordPress write capacity all
-   * day. Splitting them by time of day keeps each one's writes off the
-   * other's - and puts this one in the quietest traffic window.
+   * Both rotations used to run 500/run - large write bursts against
+   * WordPress that were noticeably slowing the live site during the day.
+   * Cutting to 250/run halves the burst size per run; running every 30
+   * minutes instead of hourly keeps total daily throughput (8 x 250 =
+   * 2,000/day) well above the ~1,825-post pool, so the whole pool cycles
+   * comfortably inside its 2.5-day refresh interval with headroom to spare.
    *
-   * 5 runs x 500 covers the ~1,825 posts in scope comfortably (finishes in
-   * about 4 runs), and at roughly 3 seconds per post a 500-post run takes
-   * ~25 minutes, well inside its hour.
+   * This rotation now owns 1:00-4:30am specifically so the two rotations
+   * never overlap in time; old-posts owns 4:30-6:00am right after it (see
+   * OldPostsFreshnessCronService). Both are now confined to the same
+   * quietest overnight window instead of old-posts spilling into daytime
+   * hours, which is what was causing the slowdown.
    *
    * Self-healing: each run only touches posts that are actually overdue, so
    * a missed run doesn't skip anything - the next one finds them still due.
    */
-  @Cron("0 1-5 * * *", { name: "freshness-refresh", timeZone: "Africa/Lagos" })
+  @Cron("0,30 1-4 * * *", { name: "freshness-refresh", timeZone: "Africa/Lagos" })
   async runRefresh(): Promise<void> {
     if (process.env.DISABLE_CRONS === "true") return;
+    // The 1-4 hour range with a 0,30 minute list fires at 1:00, 1:30, 2:00,
+    // 2:30, 3:00, 3:30, 4:00, 4:30 - 8 runs, stopping exactly at 4:30 so
+    // this never overlaps old-posts' 4:30-6:00am window.
     if (this.isRunning) {
       this.logger.warn("Cron: freshness pass still running from a previous trigger - skipping");
       return;
@@ -47,7 +55,7 @@ export class FreshnessCronService {
     this.isRunning = true;
     this.logger.log("Cron: starting freshness refresh pass");
     try {
-      const result = await this.freshness.runPass(500);
+      const result = await this.freshness.runPass(250);
       this.logger.log(`Cron: freshness pass done - ${JSON.stringify(result)}`);
     } catch (err) {
       this.logger.error(`Cron: freshness pass failed: ${(err as Error).message}`);

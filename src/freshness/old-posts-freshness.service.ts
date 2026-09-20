@@ -17,27 +17,31 @@ import { concurrentMap } from "./concurrent-map";
  * first place - not because they don't deserve a freshness signal, but
  * because using the (fake) `date` to decide eligibility would have been
  * unsafe. This service sidesteps that entirely: it doesn't use `date` for
- * anything, it just walks every eligible post below the cutoff and puts it
- * in a DETERMINISTIC bucket (post.id % 3), reusing the exact same visible
+ * anything, it just tracks its OWN last-refreshed timestamp per post
+ * (freshness-state-old.json), reusing the exact same visible
  * "by {author} — {date}" byline treatment as the main rotation.
  *
  * Scope: download-mp3 only, excluding Next Rated - real song-download
  * posts specifically, not news/albums/lyrics/other categories (25,277
  * posts confirmed live, vs. 37,233 across all 9 categories).
  *
- * Deterministic buckets (not "refresh whatever's overdue, capped at N/run"):
- * every post is assigned to exactly one of 3 buckets (0-2) permanently, once,
- * based on its own ID - never reassigned. A daily cron runs ONLY today's
- * bucket (a repeating day-index mod 3, NOT day-of-week - 3 doesn't evenly
- * divide a 7-day week, so the mapping deliberately uses a day-of-epoch
- * count instead), refreshing up to a per-run cap from it. This guarantees
- * each post refreshes exactly once every 3 days, no more, no less - unlike
- * an interval+cap system, which can silently under-rotate if the eligible
- * pool ever exceeds cap*runs_per_interval.
+ * Same interval+cap model as the main FreshnessService (not the deterministic
+ * bucket-assignment system this used to run): every post overdue per
+ * refreshIntervalDays is a candidate on every run, up to the per-run cap -
+ * no artificial day-of-id rotation. Switched from buckets because the two
+ * rotations now share a single confined overnight window (this one:
+ * 04:30-07:00 Lagos, see OldPostsFreshnessCronService) instead of running
+ * around the clock, so the previous "exactly once every 3 days, guaranteed"
+ * bucket guarantee no longer matched reality anyway - at the smaller
+ * 1,250/day capacity this window allows, the real cycle is ~20 days
+ * regardless of mechanism. Interval+cap is simpler and reuses proven code
+ * from FreshnessService rather than maintaining bucket logic that no
+ * longer buys anything extra.
  *
- * Deliberately a SEPARATE state file and SEPARATE mechanism from the main
- * FreshnessService, per explicit instruction not to change the existing
- * rotation's behavior at all - this is purely additive.
+ * Deliberately a SEPARATE state file and SEPARATE service instance from the
+ * main FreshnessService (own state file, own category scope, own min/max
+ * post-ID boundary) - the two rotations partition the whole site by post ID
+ * with no gap and no overlap, but are otherwise independent.
  */
 // Scoped to download-mp3 only (not the main rotation's full 9-category
 // list) - per explicit decision: this rotation is specifically about real
@@ -48,27 +52,11 @@ import { concurrentMap } from "./concurrent-map";
 const TARGET_CATEGORY_SLUG = "download-mp3";
 const EXCLUDE_CATEGORY_SLUG = "next-rated";
 
-const BUCKET_COUNT = 3;
 const REFRESH_CONCURRENCY = 3;
 
 interface OldPostsFreshnessState {
-  /** Post ID (string) -> its permanent bucket assignment (0-2). Never reassigned once set. */
-  buckets: Record<string, number>;
-  /** Post ID -> ISO timestamp last refreshed (for observability only, not used to decide eligibility). */
-  lastRefreshed: Record<string, string>;
-  /**
-   * Which bucket number is currently "in progress" for today, and the set of
-   * post IDs within it already done - lets an hourly cron process a day's
-   * bucket gradually (capped per run) across many calls instead of all at
-   * once, while still guaranteeing every post in the bucket gets refreshed
-   * before the day ends. Reset (cleared + reseeded) whenever the day's
-   * bucket number changes.
-   */
-  inProgress?: {
-    bucket: number;
-    /** Post IDs from this bucket not yet refreshed today. */
-    remaining: number[];
-  };
+  /** Post ID -> ISO timestamp this service last refreshed it (or indexed it, if never refreshed). */
+  posts: Record<string, string>;
   indexBuiltAt?: string;
 }
 
@@ -79,17 +67,13 @@ function formatDate(d: Date): string {
 const BYLINE_MARKER_ANYWHERE_REGEX =
   /\s*<p(?:\s+style="[^"]*")?>(?:<em>)?(?:Last updated:|by\s)[\s\S]*?<\/(?:em><\/p>|p>)\s*/gi;
 
-/** Deterministic, permanent bucket assignment - pure function of the post ID. */
-export function bucketForPostId(postId: number): number {
-  return postId % BUCKET_COUNT;
-}
-
 @Injectable()
 export class OldPostsFreshnessService implements OnApplicationBootstrap {
   private readonly logger = new Logger(OldPostsFreshnessService.name);
   private readonly categoryIds: Map<string, number> = new Map();
   private readonly authorInfo: Map<number, { name: string; link: string }> = new Map();
   private readonly stateFile = join(process.cwd(), "freshness-state-old.json");
+  private readonly refreshIntervalDays: number;
   // Same default cutoff as FreshnessService.minPostId - the two rotations
   // must partition the whole site with no gap and no overlap. Read from the
   // SAME env var (not a separate one) specifically so they can never drift
@@ -100,6 +84,13 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
     private readonly wordpress: WordpressService,
     config: ConfigService,
   ) {
+    // At this rotation's 1,250/day capacity (5 runs x 250, 04:30-07:00
+    // Lagos) against ~25,277 posts, the pool naturally cycles once every
+    // ~20 days - 18 gives every post a real chance to come due each cycle
+    // with a little headroom, rather than setting a shorter interval that
+    // would just leave the whole pool permanently "overdue" and processing
+    // order effectively arbitrary (harmless, just less intentional).
+    this.refreshIntervalDays = Number(config.get("OLD_FRESHNESS_REFRESH_INTERVAL_DAYS") ?? 18);
     this.maxPostId = Number(config.get("FRESHNESS_MIN_POST_ID") ?? 615731);
   }
 
@@ -108,14 +99,14 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
    * FreshnessService.onApplicationBootstrap(): Railway has no persistent
    * disk, so every deploy starts from whatever freshness-state-old.json is
    * committed to git (deliberately committed empty). Without this, the
-   * index would stay empty until the next daily 6am index-build cron fires,
-   * meaning up to a full day of the hourly refresh cron doing nothing after
-   * every deploy. Runs in the background so it doesn't delay app startup.
+   * index would stay empty until the next daily index-build cron fires,
+   * meaning up to a full day of the refresh cron doing nothing after every
+   * deploy. Runs in the background so it doesn't delay app startup.
    */
   onApplicationBootstrap(): void {
     const state = this.loadState();
-    if (Object.keys(state.buckets).length > 0) {
-      this.logger.log(`Old-posts freshness index already has ${Object.keys(state.buckets).length} posts - skipping auto-build`);
+    if (Object.keys(state.posts).length > 0) {
+      this.logger.log(`Old-posts freshness index already has ${Object.keys(state.posts).length} posts - skipping auto-build`);
       return;
     }
     this.logger.log("Old-posts freshness index is empty - auto-building on startup");
@@ -154,7 +145,7 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
   }
 
   private loadState(): OldPostsFreshnessState {
-    if (!existsSync(this.stateFile)) return { buckets: {}, lastRefreshed: {} };
+    if (!existsSync(this.stateFile)) return { posts: {} };
     return JSON.parse(readFileSync(this.stateFile, "utf8")) as OldPostsFreshnessState;
   }
 
@@ -164,17 +155,11 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
 
   /** Same merge-at-write-time pattern as FreshnessService, for the same
    * concurrent-write-safety reason (see that service's header comment). */
-  private mergeAndSaveState(
-    bucketUpdates: Record<string, number>,
-    lastRefreshedUpdates: Record<string, string>,
-    options?: { indexBuiltAt?: string; inProgress?: OldPostsFreshnessState["inProgress"] },
-  ): OldPostsFreshnessState {
+  private mergeAndSaveState(updates: Record<string, string>, indexBuiltAt?: string): OldPostsFreshnessState {
     const current = this.loadState();
     const merged: OldPostsFreshnessState = {
-      buckets: { ...current.buckets, ...bucketUpdates },
-      lastRefreshed: { ...current.lastRefreshed, ...lastRefreshedUpdates },
-      indexBuiltAt: options?.indexBuiltAt ?? current.indexBuiltAt,
-      inProgress: options && "inProgress" in options ? options.inProgress : current.inProgress,
+      posts: { ...current.posts, ...updates },
+      indexBuiltAt: indexBuiltAt ?? current.indexBuiltAt,
     };
     this.saveState(merged);
     return merged;
@@ -197,16 +182,20 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
   }
 
   /**
-   * Walks download-mp3 (excluding next-rated) and assigns every post with
-   * id < maxPostId (the complement of the main rotation's scope) to its
-   * permanent bucket (post.id % 3). Existing assignments are never changed -
-   * only genuinely new-to-the-index posts get a bucket assigned.
+   * Walks download-mp3 (excluding next-rated) and indexes every post with
+   * id < maxPostId (the complement of the main rotation's scope). Existing
+   * entries keep their last-refreshed timestamp; newly-discovered posts are
+   * backdated far enough in the past to be immediately eligible - same
+   * pattern as FreshnessService.buildIndex().
    */
   async buildIndex(): Promise<{ totalIndexed: number; newlyAdded: number }> {
-    const existingKeys = new Set(Object.keys(this.loadState().buckets));
+    const existingKeys = new Set(Object.keys(this.loadState().posts));
     const categoryId = await this.resolveTargetCategoryId();
     const excludeCategoryId = await this.resolveExcludeCategoryId();
-    const bucketUpdates: Record<string, number> = {};
+    const updates: Record<string, string> = {};
+    const immediatelyEligible = new Date(
+      Date.now() - (this.refreshIntervalDays + 1) * 24 * 60 * 60 * 1000,
+    ).toISOString();
 
     if (!categoryId) {
       this.logger.warn(`Could not resolve category "${TARGET_CATEGORY_SLUG}" - nothing to index`);
@@ -234,69 +223,49 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
         if (post.id >= this.maxPostId) continue;
         const key = String(post.id);
         if (!existingKeys.has(key)) {
-          bucketUpdates[key] = bucketForPostId(post.id);
+          updates[key] = immediatelyEligible;
         }
       }
       page++;
     }
 
-    const newlyAdded = Object.keys(bucketUpdates).length;
-    const merged = this.mergeAndSaveState(bucketUpdates, {}, { indexBuiltAt: new Date().toISOString() });
-    const totalIndexed = Object.keys(merged.buckets).length;
+    const newlyAdded = Object.keys(updates).length;
+    const merged = this.mergeAndSaveState(updates, new Date().toISOString());
+    const totalIndexed = Object.keys(merged.posts).length;
     this.logger.log(`Old-posts index built: ${totalIndexed} total posts indexed, ${newlyAdded} newly added`);
     return { totalIndexed, newlyAdded };
   }
 
+  private isDue(lastRefreshedIso: string): boolean {
+    const lastTouched = new Date(lastRefreshedIso).getTime();
+    const intervalMs = this.refreshIntervalDays * 24 * 60 * 60 * 1000;
+    return Date.now() - lastTouched >= intervalMs;
+  }
+
   /**
-   * Processes up to `limit` posts from today's bucket, resuming across calls
-   * via state.inProgress so an hourly cron can spread a whole bucket's
-   * membership (potentially thousands of posts) across many runs during the
-   * day, instead of writing them all in one burst - same per-run pacing as
-   * the main FreshnessService's hourly rotation, gentler on the origin
-   * server. Guarantees exactly-once-per-3-days regardless of how many hourly
-   * calls it takes: the bucket assignment never changes, and inProgress
-   * tracks exactly which of today's bucket members are still outstanding,
-   * so a missed hour or a restart never skips or duplicates a post within
-   * the same day's bucket.
-   *
-   * When `bucket` differs from the bucket already in progress (i.e. it's a
-   * new day), inProgress is reset to the full membership of the new bucket -
-   * whatever was left unfinished from the previous day's bucket is simply
-   * abandoned for this cycle (it'll get its turn again in exactly 3 days,
-   * same as every other post - a missed/incomplete day doesn't compound).
+   * Runs one refresh pass over the stored index: finds all posts that are
+   * overdue (no bucket gating - every eligible post is a candidate on every
+   * run), refreshes up to `limit` of them via the API. With dryRun, logs
+   * what would be refreshed but writes nothing.
    */
-  async runBucket(
-    bucket: number,
-    limit = 360,
+  async runPass(
+    limit = 250,
     dryRun = false,
-  ): Promise<{ scanned: number; refreshed: number; failed: number; remainingInBucket: number }> {
-    if (bucket < 0 || bucket >= BUCKET_COUNT) {
-      throw new Error(`Invalid bucket ${bucket} - must be 0-${BUCKET_COUNT - 1}`);
-    }
-
+  ): Promise<{ scanned: number; refreshed: number; failed: number }> {
     const state = this.loadState();
-    let remaining: number[];
-
-    if (state.inProgress && state.inProgress.bucket === bucket) {
-      remaining = state.inProgress.remaining;
-    } else {
-      // New day (or first run ever) - reseed with the full bucket membership.
-      remaining = Object.keys(state.buckets)
-        .map(Number)
-        .filter((id) => state.buckets[String(id)] === bucket);
-      this.logger.log(`Old-posts bucket ${bucket} is now today's bucket - seeded ${remaining.length} posts`);
-    }
-
-    const toProcess = remaining.slice(0, limit);
-    const stillRemaining = remaining.slice(limit);
-
     let scanned = 0;
     let refreshed = 0;
     let failed = 0;
-    const lastRefreshedUpdates: Record<string, string> = {};
-    const doneThisRun: number[] = [];
+    const updates: Record<string, string> = {};
 
-    await concurrentMap(toProcess, REFRESH_CONCURRENCY, async (postId) => {
+    // Sliced to `limit` up front rather than breaking out of the loop on a
+    // counter: under concurrency the lanes would race on that check.
+    const candidateIds = Object.keys(state.posts)
+      .map(Number)
+      .filter((id) => this.isDue(state.posts[String(id)]))
+      .slice(0, limit);
+
+    await concurrentMap(candidateIds, REFRESH_CONCURRENCY, async (postId) => {
       scanned++;
 
       let content: string;
@@ -304,68 +273,38 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
         const post = await this.wordpress.getPostContent(postId);
         const author = await this.resolveAuthorInfo(post.author);
         const result = this.refreshContent(post.content, author);
-        if (!result.changed) {
-          doneThisRun.push(postId);
-          return;
-        }
+        if (!result.changed) return;
         content = result.content;
       } catch (err) {
         failed++;
         this.logger.warn(`Failed to fetch post ${postId}: ${(err as Error).message}`);
-        // Not marked done - will be retried on the next hourly call within
-        // the same day's bucket, since it's still in `remaining` minus
-        // whatever WAS successfully processed (doneThisRun).
         return;
       }
 
       if (dryRun) {
         refreshed++;
-        this.logger.log(`[dry-run] Would refresh post ${postId} (bucket ${bucket})`);
+        this.logger.log(`[dry-run] Would refresh post ${postId}`);
         return;
       }
 
       try {
         await this.wordpress.patchPost(postId, { content });
-        lastRefreshedUpdates[String(postId)] = new Date().toISOString();
+        updates[String(postId)] = new Date().toISOString();
         refreshed++;
-        doneThisRun.push(postId);
-        // Deliberately NOT logging per refreshed post: at 360/run x 24 runs
-        // this alone produced ~260k lines/month and blew through the log
-        // provider's quota (ingestion stopped entirely on Sept 3 2026, which
-        // left the Sept 1 outage invisible for days). The per-run summary
-        // below carries the same information; failures are still logged
-        // individually as warnings.
+        // No per-post success line - see the equivalent note in
+        // FreshnessService. The per-run summary below is the signal that
+        // matters; failures are still logged individually.
       } catch (err) {
         failed++;
         this.logger.warn(`Failed to refresh post ${postId}: ${(err as Error).message}`);
       }
     });
 
-    if (!dryRun) {
-      const failedIds = new Set(toProcess.filter((id) => !doneThisRun.includes(id)));
-      const newRemaining = [...stillRemaining, ...failedIds];
-      this.mergeAndSaveState(
-        {},
-        lastRefreshedUpdates,
-        { inProgress: { bucket, remaining: newRemaining } },
-      );
-    }
+    // Only merge in the posts THIS run actually refreshed - a concurrent
+    // buildIndex() write in the meantime isn't lost.
+    if (!dryRun && Object.keys(updates).length > 0) this.mergeAndSaveState(updates);
 
-    this.logger.log(
-      `Old-posts bucket ${bucket} pass done: scanned ${scanned}, refreshed ${refreshed}, failed ${failed}, ` +
-        `${stillRemaining.length} left for later runs today`,
-    );
-    return { scanned, refreshed, failed, remainingInBucket: stillRemaining.length };
-  }
-
-  /** Distribution snapshot - how many posts are in each bucket right now. Useful for verifying accuracy before/after a production rollout. */
-  getBucketDistribution(): Record<number, number> {
-    const state = this.loadState();
-    const distribution: Record<number, number> = {};
-    for (let i = 0; i < BUCKET_COUNT; i++) distribution[i] = 0;
-    for (const bucket of Object.values(state.buckets)) {
-      distribution[bucket] = (distribution[bucket] ?? 0) + 1;
-    }
-    return distribution;
+    this.logger.log(`Old-posts freshness pass done: scanned ${scanned}, refreshed ${refreshed}, failed ${failed}`);
+    return { scanned, refreshed, failed };
   }
 }
