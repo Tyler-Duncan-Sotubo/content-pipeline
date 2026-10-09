@@ -43,13 +43,20 @@ import { concurrentMap } from "./concurrent-map";
  * post-ID boundary) - the two rotations partition the whole site by post ID
  * with no gap and no overlap, but are otherwise independent.
  */
-// Scoped to download-mp3 only (not the main rotation's full 9-category
-// list) - per explicit decision: this rotation is specifically about real
-// song-download posts, not news/albums/lyrics/etc. "Next Rated" posts are
-// excluded too (confirmed live: cuts the pool from 37,233 to 25,277) since
-// they're a distinct content type the site already treats separately (the
-// CTA-banner content filter excludes them the same way).
-const TARGET_CATEGORY_SLUG = "download-mp3";
+// Scoped to the download-style song category only (not the main rotation's
+// full 9-category list) - per explicit decision: this rotation is
+// specifically about real song-download posts, not news/albums/lyrics/etc.
+// "Next Rated" posts are excluded too (confirmed live: cuts the pool from
+// 37,233 to 25,277) since they're a distinct content type the site already
+// treats separately (the CTA-banner content filter excludes them the same
+// way).
+//
+// Was "download-mp3" until its slug changed (Oct 2026) - same category
+// (id 1, confirmed live by its oldest post IDs being unchanged), now
+// slugged "songs" instead. NOT "download-song" (id 30461, "HOT!!"), which
+// looked like the obvious rename but is a dead/legacy category whose last
+// post was March 2026.
+const TARGET_CATEGORY_SLUG = "songs";
 const EXCLUDE_CATEGORY_SLUG = "next-rated";
 
 const REFRESH_CONCURRENCY = 3;

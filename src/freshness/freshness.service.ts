@@ -46,7 +46,12 @@ import { concurrentMap } from "./concurrent-map";
 const REFRESH_CONCURRENCY = 3;
 
 const CATEGORY_SLUGS = [
-  "download-mp3",
+  // Was "download-mp3" until its slug changed (Oct 2026). "download-song"
+  // (id 30461, "HOT!!") looked like the obvious rename but is actually a
+  // dead/legacy category - its last post was March 2026. Confirmed live:
+  // id 1 ("Songs", slug "songs") is where brand-new download-style posts
+  // (Artist Name:/Track Title: metadata block) are landing today.
+  "songs",
   "south-africa",
   "congo",
   "kenya",
