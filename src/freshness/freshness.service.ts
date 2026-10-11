@@ -74,8 +74,25 @@ interface FreshnessState {
   indexBuiltAt?: string;
 }
 
+/**
+ * Includes a time-of-day (not just the date) specifically because this
+ * service now refreshes some posts twice in the same day, 12 hours apart
+ * (see FreshnessCronService's AM/PM windows) - a date-only marker would
+ * render byte-identical on both touches, so refreshContent()'s
+ * content-changed check would see no difference and skip the actual
+ * patchPost() call on the second touch, defeating the point (no
+ * post_modified change = no second signal for search crawlers to notice).
+ * Time-of-day guarantees the two touches always produce different content.
+ */
 function formatDate(d: Date): string {
-  return d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  return d.toLocaleString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "Africa/Lagos",
+  });
 }
 
 @Injectable()
@@ -312,21 +329,82 @@ export class FreshnessService implements OnApplicationBootstrap {
   }
 
   /**
+   * Re-touches an explicit list of post IDs regardless of whether they're
+   * "due" - used by the afternoon freshness-refresh cron to re-apply the
+   * byline refresh to exactly the posts the morning window already
+   * touched today, giving each one two post_modified changes 12 hours
+   * apart instead of one. A second same-day touch is pointless under the
+   * normal isDue() gate (a post refreshed this morning won't be overdue
+   * again for another ~2.5 days), so this bypasses that gate entirely by
+   * design - the point IS to re-touch posts that aren't "due" yet, to give
+   * search crawlers a second same-day signal to notice and re-index sooner.
+   */
+  async rerunPostIds(
+    postIds: number[],
+    dryRun = false,
+  ): Promise<{ scanned: number; refreshed: number; failed: number }> {
+    let scanned = 0;
+    let refreshed = 0;
+    let failed = 0;
+    const updates: Record<string, string> = {};
+
+    await concurrentMap(postIds, REFRESH_CONCURRENCY, async (postId) => {
+      scanned++;
+
+      let content: string;
+      try {
+        const post = await this.wordpress.getPostContent(postId);
+        const author = await this.resolveAuthorInfo(post.author);
+        const result = this.refreshContent(post.content, author);
+        if (!result.changed) return;
+        content = result.content;
+      } catch (err) {
+        failed++;
+        this.logger.warn(`Failed to fetch post ${postId}: ${(err as Error).message}`);
+        return;
+      }
+
+      if (dryRun) {
+        refreshed++;
+        this.logger.log(`[dry-run] Would re-touch post ${postId}`);
+        return;
+      }
+
+      try {
+        await this.wordpress.patchPost(postId, { content });
+        updates[String(postId)] = new Date().toISOString();
+        refreshed++;
+      } catch (err) {
+        failed++;
+        this.logger.warn(`Failed to re-touch post ${postId}: ${(err as Error).message}`);
+      }
+    });
+
+    if (!dryRun && Object.keys(updates).length > 0) this.mergeAndSaveState(updates);
+
+    this.logger.log(`Freshness re-touch pass done: scanned ${scanned}, refreshed ${refreshed}, failed ${failed}`);
+    return { scanned, refreshed, failed };
+  }
+
+  /**
    * Runs one refresh pass over the stored index: finds all posts that are
    * overdue (no day-group gating - every eligible post rolls every run),
    * refreshes up to `limit` of them via the API. With dryRun, logs what
    * would be refreshed but writes nothing (state file is also left
-   * untouched on dry-run).
+   * untouched on dry-run). Returns the IDs actually refreshed so a caller
+   * (the morning cron) can re-touch the same posts again later the same
+   * day - see rerunPostIds().
    */
   async runPass(
     limit = 150,
     dryRun = false,
-  ): Promise<{ scanned: number; refreshed: number; failed: number }> {
+  ): Promise<{ scanned: number; refreshed: number; failed: number; refreshedIds: number[] }> {
     const state = this.loadState();
     let scanned = 0;
     let refreshed = 0;
     let failed = 0;
     const updates: Record<string, string> = {};
+    const refreshedIds: number[] = [];
 
     // Sliced to `limit` up front rather than breaking out of the loop on a
     // counter: under concurrency the lanes would race on that check.
@@ -360,6 +438,7 @@ export class FreshnessService implements OnApplicationBootstrap {
       try {
         await this.wordpress.patchPost(postId, { content });
         updates[String(postId)] = new Date().toISOString();
+        refreshedIds.push(postId);
         refreshed++;
         // No per-post success line - see the equivalent note in
         // old-posts-freshness.service.ts. The per-run summary below is the
@@ -375,6 +454,6 @@ export class FreshnessService implements OnApplicationBootstrap {
     if (!dryRun && Object.keys(updates).length > 0) this.mergeAndSaveState(updates);
 
     this.logger.log(`Freshness pass done: scanned ${scanned}, refreshed ${refreshed}, failed ${failed}`);
-    return { scanned, refreshed, failed };
+    return { scanned, refreshed, failed, refreshedIds };
   }
 }
