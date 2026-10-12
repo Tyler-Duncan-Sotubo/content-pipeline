@@ -140,7 +140,13 @@ export class DeadMp3SweepService {
         try {
           await this.wordpress.patchPost(post.id, { content: stripBakedAds(result.content).content });
           fixed++;
-          this.logger.log(
+          // Logged at warn (not info) specifically so this reaches Better
+          // Stack - LOGTAIL_LEVEL defaults to "warn", and these fix lines
+          // are rare enough (a handful per hundred-plus checked) not to
+          // repeat the log-volume problem that caused the Sept 1 outage
+          // (that was a genuinely per-post line on every refresh at scale,
+          // not a rare match like this).
+          this.logger.warn(
             `Fixed post ${post.id} ("${title}"): audio x${result.removedAudio}, ` +
               `download x${result.removedDownloadButton}, last-verified x${result.removedLastVerified}` +
               (replacementUrl ? `, replacement: ${replacementUrl}` : ""),
