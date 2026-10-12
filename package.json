@@ -22,7 +22,9 @@
     "append-letter-paragraph": "ts-node src/append-letter-paragraph.ts",
     "merge-intro-into-az-row": "ts-node src/merge-intro-into-az-row.ts",
     "typecheck": "tsc --noEmit",
-    "entertainment": "ts-node src/cli-entertainment.ts"
+    "entertainment": "ts-node src/cli-entertainment.ts",
+    "strip-dead-mp3": "ts-node src/cli-strip-dead-mp3.ts",
+    "strip-dead-mp3-batch": "ts-node src/cli-strip-dead-mp3-batch.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

@@ -4,6 +4,7 @@ import { ScheduleModule } from "@nestjs/schedule";
 import { PipelineModule } from "./pipeline/pipeline.module";
 import { FreshnessModule } from "./freshness/freshness.module";
 import { EntertainmentModule } from "./entertainment/entertainment.module";
+import { DeadMp3Module } from "./dead-mp3/dead-mp3.module";
 import { LoggerModule } from "./logger/logger.module";
 import { validateEnv } from "./env.validation";
 
@@ -15,6 +16,7 @@ import { validateEnv } from "./env.validation";
     PipelineModule,
     FreshnessModule,
     EntertainmentModule,
+    DeadMp3Module,
   ],
 })
 export class AppModule {}
