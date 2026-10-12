@@ -37,19 +37,15 @@ export class DeadMp3SweepCronService {
     this.isRunning = true;
     try {
       const result = await this.sweep.runSweep(50, true, false);
-      if (result.fixed > 0) {
-        // warn (not info/log) specifically so this reaches Better Stack -
-        // LOGTAIL_LEVEL defaults to "warn". Gated on fixed > 0 (not just
-        // checked > 0) because checked is non-zero on almost every run
-        // until the whole ~40k-post scope is swept - logging THAT at warn
-        // would mean 288 lines/day indefinitely, which is the same class
-        // of log-volume problem that caused the Sept 1 outage. A fix is
-        // rare (a handful per hundred-plus checked), so gating on it keeps
-        // this line infrequent while still surfacing every real change.
-        this.logger.warn(`Cron: dead-mp3 sweep done - ${JSON.stringify(result)}`);
-      }
-      // No line at all when fixed === 0 - the common case, deliberately
-      // silent so a 5-minute cron doesn't produce constant log noise.
+      // Logged every run (not gated on fixed > 0) specifically as a
+      // heartbeat - confirmed live that info-level lines DO reach Better
+      // Stack fine (production's LOGTAIL_LEVEL isn't actually "warn"
+      // despite that being the code's default), so there's no log-volume
+      // risk here the way there would be at warn; this just confirms the
+      // cron is alive and progressing even on runs where nothing matched
+      // (the common case - a real fix is rare, a handful per hundred-plus
+      // checked).
+      this.logger.log(`Cron: dead-mp3 sweep done - ${JSON.stringify(result)}`);
     } catch (err) {
       this.logger.error(`Cron: dead-mp3 sweep failed: ${(err as Error).message}`);
     } finally {
