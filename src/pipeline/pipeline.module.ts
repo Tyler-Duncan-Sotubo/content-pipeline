@@ -19,5 +19,11 @@ import { LinksService } from "../links/links.service";
     StateService,
     LinksService,
   ],
+  // LinksService exported so cli-strip-dead-mp3.ts (and any other code
+  // outside this module) can resolve it via app.get(LinksService) against
+  // the full AppModule context - without this export, Nest's DI container
+  // treats it as private to PipelineModule and throws
+  // UnknownElementException for any resolution attempted from outside.
+  exports: [LinksService],
 })
 export class PipelineModule {}

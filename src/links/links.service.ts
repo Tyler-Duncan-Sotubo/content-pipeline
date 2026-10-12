@@ -23,8 +23,17 @@ export class LinksService {
   }
 
   async findStreamingLink(artist: string, songTitle: string): Promise<StreamingLink | null> {
-    const query = `${artist} ${songTitle}`;
+    return this.findStreamingLinkForQuery(`${artist} ${songTitle}`);
+  }
 
+  /**
+   * Same Spotify -> YouTube -> Audiomack fallback chain as findStreamingLink,
+   * for callers that already have a single natural-language query (e.g. a
+   * post's own title) rather than separate artist/songTitle fields - used
+   * by the dead-mp3 stripping CLI, where titles aren't reliably splittable
+   * into clean artist/title parts across years of inconsistent formatting.
+   */
+  async findStreamingLinkForQuery(query: string): Promise<StreamingLink | null> {
     const spotify = await this.trySpotify(query);
     if (spotify) return spotify;
 
@@ -36,6 +45,22 @@ export class LinksService {
       platform: "Audiomack",
       url: `https://audiomack.com/search?q=${encodeURIComponent(query)}`,
     };
+  }
+
+  /**
+   * YouTube-first (not Spotify-first like findStreamingLinkForQuery) -
+   * per explicit preference for the dead-mp3 replacement-link feature:
+   * YouTube is wanted as the primary choice there, with Spotify only as a
+   * fallback when no YouTube video is found. No Audiomack fallback here
+   * (not asked for) - returns null if neither YouTube nor Spotify has a
+   * match, leaving the caller to decide what to do (e.g. strip without a
+   * replacement link).
+   */
+  async findYouTubeThenSpotify(query: string): Promise<StreamingLink | null> {
+    const youtube = await this.tryYouTube(query);
+    if (youtube) return youtube;
+
+    return this.trySpotify(query);
   }
 
   private async trySpotify(query: string): Promise<StreamingLink | null> {

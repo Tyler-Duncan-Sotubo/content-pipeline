@@ -435,17 +435,45 @@ export class WordpressService {
     );
   }
 
-  /** Fetches a single post's content and author ID. Used by the freshness-refresh cron. */
+  /**
+   * Lists posts across MULTIPLE categories at once (OR logic - matches
+   * posts in any of the given category IDs), ordered by ID ascending.
+   * Used by the dead-mp3 batch sweep, which walks the whole site's post
+   * IDs from lowest to highest across a fixed set of categories (the 9
+   * freshness categories plus next-rated) rather than one category at a
+   * time - WordPress's REST API accepts a comma-separated categories
+   * param natively, so this is a single query per page, not N queries for
+   * N categories.
+   */
+  async listPostsByCategoriesOldestFirst(
+    categoryIds: number[],
+    page: number,
+    perPage = 100,
+  ): Promise<{ id: number; link: string; title: { rendered: string }; content: { rendered: string } }[]> {
+    return this.request(
+      `/posts?categories=${categoryIds.join(",")}&page=${page}&per_page=${perPage}` +
+        `&orderby=id&order=asc&_fields=id,link,title,content`,
+    );
+  }
+
+  /** Fetches a single post's content, title, and author ID. Used by the freshness-refresh cron and the dead-mp3 stripping tool (title is needed there for a YouTube-link lookup query). */
   async getPostContent(
     postId: number,
-  ): Promise<{ id: number; link: string; content: string; author: number }> {
+  ): Promise<{ id: number; link: string; title: string; content: string; author: number }> {
     const post = await this.request<{
       id: number;
       link: string;
+      title: { rendered: string };
       content: { rendered: string };
       author: number;
-    }>(`/posts/${postId}?_fields=id,link,content,author`);
-    return { id: post.id, link: post.link, content: post.content.rendered, author: post.author };
+    }>(`/posts/${postId}?_fields=id,link,title,content,author`);
+    return {
+      id: post.id,
+      link: post.link,
+      title: post.title.rendered,
+      content: post.content.rendered,
+      author: post.author,
+    };
   }
 
   /** Resolves a WP user ID to their display name + author archive URL. Used by the freshness-refresh cron for the byline. */
