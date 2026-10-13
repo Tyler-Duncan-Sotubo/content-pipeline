@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { WordpressService } from "../publish/wordpress.service";
 import { stripBakedAds } from "../strip-baked-ads";
 import { concurrentMap } from "./concurrent-map";
+import { isProduction } from "../is-production";
 
 /**
  * Second, independent freshness rotation for posts BELOW the main
@@ -111,6 +112,9 @@ export class OldPostsFreshnessService implements OnApplicationBootstrap {
    * deploy. Runs in the background so it doesn't delay app startup.
    */
   onApplicationBootstrap(): void {
+    // Skip entirely when not running in production - see
+    // FreshnessService.onApplicationBootstrap() for the same reasoning.
+    if (!isProduction()) return;
     const state = this.loadState();
     if (Object.keys(state.posts).length > 0) {
       this.logger.log(`Old-posts freshness index already has ${Object.keys(state.posts).length} posts - skipping auto-build`);

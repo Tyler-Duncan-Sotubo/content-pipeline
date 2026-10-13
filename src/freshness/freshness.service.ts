@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { WordpressService } from "../publish/wordpress.service";
 import { stripBakedAds } from "../strip-baked-ads";
 import { concurrentMap } from "./concurrent-map";
+import { isProduction } from "../is-production";
 
 /**
  * Real (not faked) freshness refresh: appends/updates a "by {author} — {date}"
@@ -122,6 +123,10 @@ export class FreshnessService implements OnApplicationBootstrap {
    * logged, not thrown, so a transient WP API issue can't crash boot.
    */
   onApplicationBootstrap(): void {
+    // Skip entirely when not running in production - starting the app
+    // locally shouldn't auto-fetch from WordPress or write local state
+    // files just by booting.
+    if (!isProduction()) return;
     const state = this.loadState();
     if (Object.keys(state.posts).length > 0) {
       this.logger.log(`Freshness index already has ${Object.keys(state.posts).length} posts - skipping auto-build`);
