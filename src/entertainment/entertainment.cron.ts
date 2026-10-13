@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { EntertainmentService } from "./entertainment.service";
+import { isProduction } from "../is-production";
 
 /**
  * Entertainment aggregation, hourly at :30 between 08:30 and 22:30 Lagos.
@@ -29,7 +30,7 @@ export class EntertainmentCronService {
   // there's no point polling them.
   @Cron("30 8-22 * * *", { name: "entertainment-aggregate", timeZone: "Africa/Lagos" })
   async run(): Promise<void> {
-    if (process.env.DISABLE_CRONS === "true") return;
+    if (process.env.DISABLE_CRONS === "true" || !isProduction()) return;
     if (this.isRunning) {
       this.logger.warn("Cron: entertainment run still in progress - skipping this trigger");
       return;

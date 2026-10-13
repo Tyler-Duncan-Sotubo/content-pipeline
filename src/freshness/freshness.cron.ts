@@ -3,6 +3,7 @@ import { Cron } from "@nestjs/schedule";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FreshnessService } from "./freshness.service";
+import { isProduction } from "../is-production";
 
 /**
  * Tracks which post IDs the morning refresh window touched today, so the
@@ -90,7 +91,7 @@ export class FreshnessCronService {
   async runRefreshMorning(): Promise<void> {
     // 1:00, 1:30, 2:00, 2:30, 3:00, 3:30, 4:00, 4:30 - 8 runs, stopping
     // exactly at 4:30 so this never overlaps old-posts' 4:30-6:00am window.
-    if (process.env.DISABLE_CRONS === "true") return;
+    if (process.env.DISABLE_CRONS === "true" || !isProduction()) return;
     if (this.isRunning) {
       this.logger.warn("Cron: freshness pass still running from a previous trigger - skipping");
       return;
@@ -138,7 +139,7 @@ export class FreshnessCronService {
    */
   @Cron("0,30 13-16 * * *", { name: "freshness-refresh-pm", timeZone: "Africa/Lagos" })
   async runRefreshAfternoon(): Promise<void> {
-    if (process.env.DISABLE_CRONS === "true") return;
+    if (process.env.DISABLE_CRONS === "true" || !isProduction()) return;
     if (this.isRunning) {
       this.logger.warn("Cron: freshness pass still running from a previous trigger - skipping");
       return;
@@ -175,7 +176,7 @@ export class FreshnessCronService {
 
   @Cron("0 5 * * *", { name: "freshness-index-build", timeZone: "Africa/Lagos" })
   async runIndexBuild(): Promise<void> {
-    if (process.env.DISABLE_CRONS === "true") return;
+    if (process.env.DISABLE_CRONS === "true" || !isProduction()) return;
     this.logger.log("Cron: starting freshness index build");
     try {
       const result = await this.freshness.buildIndex();

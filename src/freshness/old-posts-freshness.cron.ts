@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { OldPostsFreshnessService } from "./old-posts-freshness.service";
+import { isProduction } from "../is-production";
 
 /**
  * Second, independent freshness rotation for posts below the main
@@ -51,7 +52,7 @@ export class OldPostsFreshnessCronService {
   }
 
   private async runRefresh(): Promise<void> {
-    if (process.env.DISABLE_CRONS === "true") return;
+    if (process.env.DISABLE_CRONS === "true" || !isProduction()) return;
     if (this.isRunning) {
       this.logger.warn("Cron: old-posts freshness pass still running from a previous trigger - skipping");
       return;
@@ -70,7 +71,7 @@ export class OldPostsFreshnessCronService {
 
   @Cron("0 6 * * *", { name: "old-posts-freshness-index-build", timeZone: "Africa/Lagos" })
   async runIndexBuild(): Promise<void> {
-    if (process.env.DISABLE_CRONS === "true") return;
+    if (process.env.DISABLE_CRONS === "true" || !isProduction()) return;
     this.logger.log("Cron: starting old-posts freshness index build");
     try {
       const result = await this.oldPostsFreshness.buildIndex();
