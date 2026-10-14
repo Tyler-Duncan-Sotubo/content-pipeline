@@ -60,6 +60,18 @@ export const envSchema = z
     LOGTAIL_SOURCE_TOKEN: z.string().optional(),
     LOGTAIL_INGEST_HOST: z.string().optional(),
     LOGTAIL_LEVEL: z.string().optional(),
+
+    // Local-only opt-in for the dead-mp3 sweep's automatic cron (see
+    // dead-mp3-sweep.cron.ts) - must be declared here or NestJS's
+    // ConfigModule silently drops it: Zod's safeParse() strips any key not
+    // in this schema from its returned object, and ConfigModule only ever
+    // ADDS keys from that returned object to process.env (never deletes
+    // existing ones) - so an undeclared .env-file-only var like this one
+    // never reaches real process.env at all, even though it's sitting
+    // right there in the .env file (confirmed live: the cron's own
+    // `process.env.DEAD_MP3_SWEEP_CRON_ENABLED !== "true"` check kept
+    // returning early despite the variable being set in .env).
+    DEAD_MP3_SWEEP_CRON_ENABLED: z.string().optional(),
   })
   .superRefine((env, ctx) => {
     if (env.PROVIDER === "openai" && !env.OPENAI_API_KEY) {
