@@ -50,17 +50,27 @@ export class LinksService {
   /**
    * YouTube-first (not Spotify-first like findStreamingLinkForQuery) -
    * per explicit preference for the dead-mp3 replacement-link feature:
-   * YouTube is wanted as the primary choice there, with Spotify only as a
-   * fallback when no YouTube video is found. No Audiomack fallback here
-   * (not asked for) - returns null if neither YouTube nor Spotify has a
-   * match, leaving the caller to decide what to do (e.g. strip without a
-   * replacement link).
+   * YouTube is wanted as the primary choice there, with Spotify as a
+   * fallback when no YouTube video is found, and Audiomack as a final
+   * fallback when NEITHER finds a verified match.
+   *
+   * The Audiomack result is NOT a verified match like the other two - it's
+   * a constructed search-results URL (Audiomack's real track-lookup API is
+   * partner-only, so there's no way to confirm a specific track exists),
+   * e.g. https://audiomack.com/search?q=Rudeboy+Together. Still better
+   * than leaving no replacement link at all when both real lookups miss.
    */
   async findYouTubeThenSpotify(query: string): Promise<StreamingLink | null> {
     const youtube = await this.tryYouTube(query);
     if (youtube) return youtube;
 
-    return this.trySpotify(query);
+    const spotify = await this.trySpotify(query);
+    if (spotify) return spotify;
+
+    return {
+      platform: "Audiomack",
+      url: `https://audiomack.com/search?q=${encodeURIComponent(query)}`,
+    };
   }
 
   private async trySpotify(query: string): Promise<StreamingLink | null> {
